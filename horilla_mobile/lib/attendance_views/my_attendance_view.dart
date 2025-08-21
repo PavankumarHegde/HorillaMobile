@@ -40,15 +40,29 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
   String attendanceClockOut = '';
   String attendanceWorkedHour = '';
   String minimumHour = '';
+  late String getToken = '';
+
 
   @override
   void initState() {
     super.initState();
     prefetchData();
     getBaseUrl();
+    fetchToken();
     dateInputMyAttendances.text = "";
     checkInTimeMyAttendances.text = "";
     checkOutTimeMyAttendances.text = "";
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    print(token);
+    print('rrrrrrrttttttt');
+    setState(() {
+      getToken = token ?? '';
+      print('token: $getToken');
+    });
   }
 
   Future<void> getBaseUrl() async {
@@ -179,6 +193,9 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
                             child: ClipOval(
                               child: Image.network(
                                 baseUrl + employeeProfile,
+                                headers: {
+                                  "Authorization": "Bearer $getToken",
+                                },
                                 fit: BoxFit.cover,
                                 errorBuilder: (BuildContext context,
                                     Object exception, StackTrace? stackTrace) {

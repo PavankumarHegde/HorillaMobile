@@ -134,31 +134,78 @@ class _LeaveRequest extends State<LeaveRequest>
   final TextEditingController _fileNameController = TextEditingController();
   Timer? _debounce;
 
+  bool isFetchingMore = false;
+  bool hasMoreAll = true;
+  bool hasMoreRequested = true;
+  bool hasMoreApproved = true;
+  bool hasMoreCancelled = true;
+  bool hasMoreRejected = true;
+  late String getToken = '';
+
+
+
   @override
   void initState() {
     super.initState();
+    currentPage = 1;
     _scrollController.addListener(_scrollListener);
     _tabController = TabController(length: 5, vsync: this);
+
+    _isShimmerVisible = true;
+    isLoading = true;
+    _isShimmer = true;
+
     startBreakdown.clear();
     startDateSelect.text = "Select Start Date";
     endDateSelect.text = "Select End Date";
     startDateInput.text = "";
     endDateInput.text = "";
-    prefetchData();
-    _simulateLoading();
+    fetchToken();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      getAllLeaveRequest();
-      getRequestedCount();
-      getApprovedCount();
-      getCancelledCount();
-      getRejectedCount();
-      getListEmployees();
-      getAllEmployeesName();
-      getBaseUrl();
-      getEmployees();
+
+    _loadInitialData();
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
     });
   }
+
+
+  Future<void> _loadInitialData() async {
+    try {
+      await prefetchData();
+      await getBaseUrl();
+      await getEmployees();
+      await getListEmployees();
+      await getAllEmployeesName();
+      await checkPermissions();
+
+      await Future.wait([
+        getAllLeaveRequest(reset: true),
+        getRequestedCount(reset: true),
+        getApprovedCount(reset: true),
+        getCancelledCount(reset: true),
+        getRejectedCount(reset: true),
+      ]);
+
+      setState(() {
+        _isShimmerVisible = false;
+        isLoading = false;
+        _isShimmer = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isShimmerVisible = false;
+        isLoading = false;
+        _isShimmer = false;
+      });
+    }
+  }
+
 
   Future<void> checkPermissions() async {
     await permissionLeaveOverviewChecks();
@@ -243,14 +290,8 @@ class _LeaveRequest extends State<LeaveRequest>
     }
   }
 
-  Future<void> _simulateLoading() async {
-    await Future.delayed(const Duration(seconds: 5));
-    setState(() {
-      _isShimmer = false;
-    });
-  }
 
-  void prefetchData() async {
+  Future<void> prefetchData() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -532,18 +573,33 @@ class _LeaveRequest extends State<LeaveRequest>
   }
 
   void _scrollListener() {
-    if (_scrollController.offset >=
-        _scrollController.position.maxScrollExtent &&
-        !_scrollController.position.outOfRange) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 100 &&
+        !isFetchingMore) {
+      setState(() => isFetchingMore = true);
       currentPage++;
-      getAllLeaveRequest();
-      getRequestedCount();
-      getApprovedCount();
-      getCancelledCount();
-      getRejectedCount();
-      getEmployees();
+      // Load the next page based on selected tab
+      switch (_tabController.index) {
+        case 0:
+          if (hasMoreAll) getAllLeaveRequest();
+          break;
+        case 1:
+          if (hasMoreRequested) getRequestedCount();
+          break;
+        case 2:
+          if (hasMoreApproved) getApprovedCount();
+          break;
+        case 3:
+          if (hasMoreCancelled) getCancelledCount();
+          break;
+        case 4:
+          if (hasMoreRejected) getRejectedCount();
+          break;
+      }
+      setState(() => isFetchingMore = false);
     }
   }
+
 
   void setFileName() {
     setState(() {
@@ -1200,24 +1256,38 @@ class _LeaveRequest extends State<LeaveRequest>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    for (var page = 1;; page++) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/employee/employee-selector?page=$page');
+
+    allEmployeeNames.clear();
+    int page = 1;
+    bool hasMore = true;
+
+    while (hasMore) {
+      var uri = Uri.parse('$typedServerUrl/api/employee/employee-selector?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
+        var data = jsonDecode(response.body);
+        var results = data['results'];
+
+        if (results.isEmpty) {
+          hasMore = false;
+          break;
+        }
+
         setState(() {
-          var results = jsonDecode(response.body)['results'];
-          if (results.isEmpty) {}
           for (var employee in results) {
-            var employeeName = employee['employee_first_name'] +
-                ' ' +
-                (employee['employee_last_name'] ?? '');
+            var employeeName = "${employee['employee_first_name'] ?? ''} ${employee['employee_last_name'] ?? ''}".trim();
             allEmployeeNames.add(employeeName);
           }
         });
+
+        page++;
+      } else {
+        print('Failed to fetch employee names: ${response.statusCode}');
+        hasMore = false;
       }
     }
   }
@@ -1854,7 +1924,8 @@ class _LeaveRequest extends State<LeaveRequest>
                                             context,
                                             MaterialPageRoute(
                                               builder: (context) =>
-                                                  ImageViewer(imagePath: pdfPath),
+                                                  ImageViewer(imagePath: pdfPath,
+                                                    token: getToken,),
                                             ),
                                           );
                                         } else {
@@ -2067,27 +2138,39 @@ class _LeaveRequest extends State<LeaveRequest>
   List<Map<String, dynamic>> filterAllRecords(String searchText) {
     if (searchText.isEmpty) {
       return myAllRequests;
-    } else {
-      return myAllRequests.where((record) {
-        final firstName = record['employee_id']['full_name'] ?? '';
-        final lastName = record['employee_last_name'] ?? '';
-        final fullName = (firstName + ' ' + lastName).toLowerCase();
-        return fullName.contains(searchText.toLowerCase());
-      }).toList();
     }
+    return myAllRequests.where((record) {
+      final fullName = record['employee_id']['full_name']?.toLowerCase() ?? '';
+      final badgeId = record['employee_id']['badge_id']?.toLowerCase() ?? '';
+      final leaveType = record['leave_type_id']['name']?.toLowerCase() ?? '';
+      final status = record['status']?.toLowerCase() ?? '';
+      final description = record['description']?.toLowerCase() ?? '';
+
+      return fullName.contains(searchText.toLowerCase()) ||
+          badgeId.contains(searchText.toLowerCase()) ||
+          leaveType.contains(searchText.toLowerCase()) ||
+          status.contains(searchText.toLowerCase()) ||
+          description.contains(searchText.toLowerCase());
+    }).toList();
   }
 
   List<Map<String, dynamic>> filterRequestedRecords(String searchText) {
     if (searchText.isEmpty) {
       return requestedRecords;
-    } else {
-      return requestedRecords.where((record) {
-        final firstName = record['employee_id']['full_name'] ?? '';
-        final lastName = record['employee_last_name'] ?? '';
-        final fullName = (firstName + ' ' + lastName).toLowerCase();
-        return fullName.contains(searchText.toLowerCase());
-      }).toList();
     }
+    return requestedRecords.where((record) {
+      final fullName = record['employee_id']['full_name']?.toLowerCase() ?? '';
+      final badgeId = record['employee_id']['badge_id']?.toLowerCase() ?? '';
+      final leaveType = record['leave_type_id']['name']?.toLowerCase() ?? '';
+      final status = record['status']?.toLowerCase() ?? '';
+      final description = record['description']?.toLowerCase() ?? '';
+
+      return fullName.contains(searchText.toLowerCase()) ||
+          badgeId.contains(searchText.toLowerCase()) ||
+          leaveType.contains(searchText.toLowerCase()) ||
+          status.contains(searchText.toLowerCase()) ||
+          description.contains(searchText.toLowerCase());
+    }).toList();
   }
 
   List<Map<String, dynamic>> filterApprovedRecords(String searchText) {
@@ -2129,78 +2212,63 @@ class _LeaveRequest extends State<LeaveRequest>
     }
   }
 
-  Future<void> getAllLeaveRequest() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?page=$currentPage&search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          myAllRequests.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = myAllRequests.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          myAllRequests = uniqueMapStrings.map(deserializeMap).toList();
-          allRequestsLength = jsonDecode(response.body)['count'];
-          _isShimmerVisible = false;
-          filteredRecords = filterAllRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
-    } else {
+  Future getAllLeaveRequest({bool reset = false}) async {
+    if (reset) {
       currentPage = 1;
-      var uri =
-      Uri.parse('$typedServerUrl/api/leave/request?search=$searchText');
+      myAllRequests.clear();
+      hasMoreAll = true;
+    }
+
+    if (!hasMoreAll) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var token = prefs.getString("token");
+      var typedServerUrl = prefs.getString("typed_url");
+
+      var uri = Uri.parse(
+          '$typedServerUrl/api/leave/request?page=$currentPage${searchText.isNotEmpty ? '&search=$searchText' : ''}');
+
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
+        final results = (jsonDecode(response.body)['results'] as List)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+
         setState(() {
-          myAllRequests.clear();
-          myAllRequests.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
+          if (results.isEmpty) {
+            hasMoreAll = false;
+          } else {
+            myAllRequests.addAll(results);
+            // remove duplicates
+            myAllRequests = myAllRequests
+                .map((m) => jsonEncode(m))
+                .toSet()
+                .map((s) => jsonDecode(s) as Map<String, dynamic>)
+                .toList();
+            allRequestsLength = jsonDecode(response.body)['count'] ?? 0;
+            filteredRecords = filterAllRecords(searchText);
           }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = myAllRequests.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          myAllRequests = uniqueMapStrings.map(deserializeMap).toList();
-          allRequestsLength = jsonDecode(response.body)['count'];
+          isLoading = false;
           _isShimmerVisible = false;
-          filteredRecords = filterAllRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
+        });
+      } else if (response.statusCode == 404) {
+        setState(() {
+          hasMoreAll = false;
+          isLoading = false;
+          _isShimmerVisible = false;
         });
       }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+        _isShimmerVisible = false;
+      });
+      // Handle error
     }
   }
 
@@ -2223,296 +2291,191 @@ class _LeaveRequest extends State<LeaveRequest>
     }
   }
 
-  Future<void> getRequestedCount() async {
+  Future<void> getRequestedCount({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=requested&search=$searchText&page=$currentPage');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestedRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = requestedRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestedRecords = uniqueMapStrings.map(deserializeMap).toList();
-          requestedLength = jsonDecode(response.body)['count'];
-          filteredRecordsRequested = filterRequestedRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
-    } else {
+    if (reset) {
       currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=requested?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestedRecords.clear();
-          requestedRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
+      requestedRecords.clear();
+      hasMoreRequested = true;
+    }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
+    if (!hasMoreRequested) return;
 
-          List<String> mapStrings = requestedRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestedRecords = uniqueMapStrings.map(deserializeMap).toList();
-          requestedLength = jsonDecode(response.body)['count'];
-          filteredRecordsRequested = filterRequestedRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
+    var uri = Uri.parse(
+        '$typedServerUrl/api/leave/request?status=requested&search=$searchText&page=$currentPage');
+
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    });
+
+    if (response.statusCode == 200) {
+      final results = (jsonDecode(response.body)['results'] as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      if (results.isEmpty) {
+        hasMoreRequested = false;
+        return;
       }
+
+      setState(() {
+        requestedRecords.addAll(results);
+        requestedRecords = requestedRecords
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        requestedLength = jsonDecode(response.body)['count'] ?? 0;
+        filteredRecordsRequested = filterRequestedRecords(searchText);
+        isLoading = false;
+      });
+    } else if (response.statusCode == 404) {
+      hasMoreRequested = false;
     }
   }
 
-  Future<void> getApprovedCount() async {
+  Future<void> getApprovedCount({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=approved&search=$searchText&page=$currentPage');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          approvedRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = approvedRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          approvedRecords = uniqueMapStrings.map(deserializeMap).toList();
-          approvedLength = jsonDecode(response.body)['count'];
-          filteredRecordsApproved = filterApprovedRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
-    } else {
+    if (reset) {
       currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=approved?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          approvedRecords.clear();
-          approvedRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
+      approvedRecords.clear();
+      hasMoreApproved = true;
+    }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
+    if (!hasMoreApproved) return;
 
-          List<String> mapStrings = approvedRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          approvedRecords = uniqueMapStrings.map(deserializeMap).toList();
-          approvedLength = jsonDecode(response.body)['count'];
-          filteredRecordsApproved = filterApprovedRecords(searchText);
+    var uri = Uri.parse(
+        '$typedServerUrl/api/leave/request?status=approved&search=$searchText&page=$currentPage');
 
-          setState(() {
-            isLoading = false;
-          });
-        });
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    });
+
+    if (response.statusCode == 200) {
+      final results = (jsonDecode(response.body)['results'] as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      if (results.isEmpty) {
+        hasMoreApproved = false;
+        return;
       }
+
+      setState(() {
+        approvedRecords.addAll(results);
+        approvedRecords = approvedRecords
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        approvedLength = jsonDecode(response.body)['count'] ?? 0;
+        filteredRecordsApproved = filterApprovedRecords(searchText);
+        isLoading = false;
+      });
+    } else if (response.statusCode == 404) {
+      hasMoreApproved = false;
     }
   }
 
-  Future<void> getCancelledCount() async {
+  Future<void> getCancelledCount({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=cancelled&search=$searchText&page=$currentPage');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          cancelledRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = cancelledRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          cancelledRecords = uniqueMapStrings.map(deserializeMap).toList();
-          cancelledLength = jsonDecode(response.body)['count'];
-          filteredRecordsCancelled = filterCancelledRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
-    } else {
+    if (reset) {
       currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=cancelled?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          cancelledRecords.clear();
-          cancelledRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
+      cancelledRecords.clear();
+      hasMoreCancelled = true;
+    }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
+    if (!hasMoreCancelled) return;
 
-          List<String> mapStrings = cancelledRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          cancelledRecords = uniqueMapStrings.map(deserializeMap).toList();
-          cancelledLength = jsonDecode(response.body)['count'];
-          filteredRecordsCancelled = filterCancelledRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
+    var uri = Uri.parse(
+        '$typedServerUrl/api/leave/request?status=cancelled&search=$searchText&page=$currentPage');
+
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    });
+
+    if (response.statusCode == 200) {
+      final results = (jsonDecode(response.body)['results'] as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      if (results.isEmpty) {
+        hasMoreCancelled = false;
+        return;
       }
+
+      setState(() {
+        cancelledRecords.addAll(results);
+        cancelledRecords = cancelledRecords
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        cancelledLength = jsonDecode(response.body)['count'] ?? 0;
+        filteredRecordsCancelled = filterCancelledRecords(searchText);
+        isLoading = false;
+      });
+    } else if (response.statusCode == 404) {
+      hasMoreCancelled = false;
     }
   }
 
-  Future<void> getRejectedCount() async {
+  Future<void> getRejectedCount({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=rejected&search=$searchText&page=$currentPage');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          rejectedRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = requestedRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestedRecords = uniqueMapStrings.map(deserializeMap).toList();
-          rejectedLength = jsonDecode(response.body)['count'];
-          filteredRecordsRejected = filterRejectedRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
-    } else {
+    if (reset) {
       currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/request?status=rejected?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          rejectedRecords.clear();
-          rejectedRecords.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
+      rejectedRecords.clear();
+      hasMoreRejected = true;
+    }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
+    if (!hasMoreRejected) return;
 
-          List<String> mapStrings = requestedRecords.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestedRecords = uniqueMapStrings.map(deserializeMap).toList();
-          rejectedLength = jsonDecode(response.body)['count'];
-          filteredRecordsRejected = filterRejectedRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
+    var uri = Uri.parse(
+        '$typedServerUrl/api/leave/request?status=rejected&search=$searchText&page=$currentPage');
+
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    });
+
+    if (response.statusCode == 200) {
+      final results = (jsonDecode(response.body)['results'] as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      if (results.isEmpty) {
+        hasMoreRejected = false;
+        return;
       }
+
+      setState(() {
+        rejectedRecords.addAll(results);
+        rejectedRecords = rejectedRecords
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        rejectedLength = jsonDecode(response.body)['count'] ?? 0;
+        filteredRecordsRejected = filterRejectedRecords(searchText);
+        isLoading = false;
+      });
+    } else if (response.statusCode == 404) {
+      hasMoreRejected = false;
     }
   }
 
@@ -2953,38 +2916,30 @@ class _LeaveRequest extends State<LeaveRequest>
                           border: Border.all(color: Colors.grey.shade50),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: TextField(
-                          onChanged: (wardSearchValue) {
-                            if (_debounce?.isActive ?? false) {
-                              _debounce!.cancel();
-                            }
-                            _debounce =
-                                Timer(const Duration(milliseconds: 1000), () {
-                                  setState(() {
-                                    searchText = wardSearchValue;
-                                    currentPage = 0;
-                                    myAllRequests.clear();
-                                    requestedRecords.clear();
-                                    approvedRecords.clear();
-                                    cancelledRecords.clear();
-                                    rejectedRecords.clear();
-                                    filteredRecords.clear();
-                                    filteredRecordsRequested.clear();
-                                    filteredRecordsApproved.clear();
-                                    filteredRecordsCancelled.clear();
-                                    filteredRecordsRejected.clear();
-                                    getAllLeaveRequest();
-                                    getRequestedCount();
-                                    getApprovedCount();
-                                    getCancelledCount();
-                                    getRejectedCount();
-                                  });
-                                });
+                        child: // Update the TextField in the _buildLeaveRequestWidget method
+                        TextField(
+                          onChanged: (value) {
+                            if (_debounce?.isActive ?? false) _debounce!.cancel();
+                            _debounce = Timer(const Duration(milliseconds: 500), () {
+                              setState(() {
+                                searchText = value;
+                                currentPage = 1; // Reset to first page when searching
+                                myAllRequests.clear();
+                                requestedRecords.clear();
+                                approvedRecords.clear();
+                                cancelledRecords.clear();
+                                rejectedRecords.clear();
+                                getAllLeaveRequest(reset: true);
+                                getRequestedCount(reset: true);
+                                getApprovedCount(reset: true);
+                                getCancelledCount(reset: true);
+                                getRejectedCount(reset: true);
+                              });
+                            });
                           },
                           decoration: InputDecoration(
                             hintText: 'Search',
-                            hintStyle: TextStyle(
-                                color: Colors.blueGrey.shade300, fontSize: 14),
+                            hintStyle: TextStyle(color: Colors.blueGrey.shade300, fontSize: 14),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8.0),
                               borderSide: BorderSide.none,
@@ -2993,11 +2948,9 @@ class _LeaveRequest extends State<LeaveRequest>
                             fillColor: Colors.grey[100],
                             prefixIcon: Transform.scale(
                               scale: 0.8,
-                              child: Icon(Icons.search,
-                                  color: Colors.blueGrey.shade300),
+                              child: Icon(Icons.search, color: Colors.blueGrey.shade300),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(
-                                vertical: 12.0, horizontal: 4.0),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 4.0),
                           ),
                           style: const TextStyle(fontSize: 14),
                         ),
@@ -3226,24 +3179,28 @@ class _LeaveRequest extends State<LeaveRequest>
               child: ListView.builder(
                 controller: _scrollController,
                 shrinkWrap: true,
-                itemCount: searchText.isEmpty
-                    ? myAllRequests.length
-                    : filteredRecords.length,
-                itemBuilder: (context, index) {
-                  final record = searchText.isEmpty
-                      ? myAllRequests[index]
-                      : filteredRecords[index];
-                  return buildAllLeaveTile(
-                    _getBreakdown(record['start_date_breakdown']),
-                    record,
-                    baseUrl,
-                    record['employee_id']['full_name'],
-                    record['employee_id']['employee_profile'] ?? "",
-                    record['employee_id']['badge_id'] ?? "",
-                    _getStateInfo(record['status']),
-                    record['id'].toString(),
-                  );
-                },
+                  itemCount: (searchText.isEmpty ? myAllRequests.length : filteredRecords.length) +
+                      (isFetchingMore ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index == (searchText.isEmpty ? myAllRequests.length : filteredRecords.length)) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final record = searchText.isEmpty ? myAllRequests[index] : filteredRecords[index];
+                    return buildAllLeaveTile(
+                      _getBreakdown(record['start_date_breakdown']),
+                      record,
+                      baseUrl,
+                      getToken,
+                      record['employee_id']['full_name'],
+                      record['employee_id']['employee_profile'] ?? "",
+                      record['employee_id']['badge_id'] ?? "",
+                      _getStateInfo(record['status']),
+                      record['id'].toString(),
+                    );
+                  }
               ),
             ),
           ),
@@ -3294,24 +3251,28 @@ class _LeaveRequest extends State<LeaveRequest>
               child: ListView.builder(
                 controller: _scrollController,
                 shrinkWrap: true,
-                itemCount: searchText.isEmpty
-                    ? requestedRecords.length
-                    : filteredRecordsRequested.length,
-                itemBuilder: (context, index) {
-                  final record = searchText.isEmpty
-                      ? requestedRecords[index]
-                      : filteredRecordsRequested[index];
-                  return buildAllLeaveTile(
-                    _getBreakdown(record['start_date_breakdown']),
-                    record,
-                    baseUrl,
-                    record['employee_id']['full_name'],
-                    record['employee_id']['employee_profile'] ?? "",
-                    record['employee_id']['badge_id'] ?? "",
-                    _getStateInfo(record['status']),
-                    record['id'].toString(),
-                  );
-                },
+                  itemCount: (searchText.isEmpty ? requestedRecords.length : filteredRecordsRequested.length) +
+                      (isFetchingMore ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index == (searchText.isEmpty ? requestedRecords.length : filteredRecordsRequested.length)) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final record = searchText.isEmpty ? requestedRecords[index] : filteredRecordsRequested[index];
+                    return buildAllLeaveTile(
+                      _getBreakdown(record['start_date_breakdown']),
+                      record,
+                      baseUrl,
+                      getToken,
+                      record['employee_id']['full_name'],
+                      record['employee_id']['employee_profile'] ?? "",
+                      record['employee_id']['badge_id'] ?? "",
+                      _getStateInfo(record['status']),
+                      record['id'].toString(),
+                    );
+                  }
               ),
             ),
           ),
@@ -3362,24 +3323,28 @@ class _LeaveRequest extends State<LeaveRequest>
               child: ListView.builder(
                 controller: _scrollController,
                 shrinkWrap: true,
-                itemCount: searchText.isEmpty
-                    ? approvedRecords.length
-                    : filteredRecordsApproved.length,
-                itemBuilder: (context, index) {
-                  final record = searchText.isEmpty
-                      ? approvedRecords[index]
-                      : filteredRecordsApproved[index];
-                  return buildAllLeaveTile(
-                    _getBreakdown(record['start_date_breakdown']),
-                    record,
-                    baseUrl,
-                    record['employee_id']['full_name'],
-                    record['employee_id']['employee_profile'] ?? "",
-                    record['employee_id']['badge_id'] ?? "",
-                    _getStateInfo(record['status']),
-                    record['id'].toString(),
-                  );
-                },
+                  itemCount: (searchText.isEmpty ? approvedRecords.length : filteredRecordsApproved.length) +
+                      (isFetchingMore ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index == (searchText.isEmpty ? approvedRecords.length : filteredRecordsApproved.length)) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final record = searchText.isEmpty ? approvedRecords[index] : filteredRecordsApproved[index];
+                    return buildAllLeaveTile(
+                      _getBreakdown(record['start_date_breakdown']),
+                      record,
+                      baseUrl,
+                      getToken,
+                      record['employee_id']['full_name'],
+                      record['employee_id']['employee_profile'] ?? "",
+                      record['employee_id']['badge_id'] ?? "",
+                      _getStateInfo(record['status']),
+                      record['id'].toString(),
+                    );
+                  }
               ),
             ),
           ),
@@ -3430,24 +3395,28 @@ class _LeaveRequest extends State<LeaveRequest>
               child: ListView.builder(
                 controller: _scrollController,
                 shrinkWrap: true,
-                itemCount: searchText.isEmpty
-                    ? cancelledRecords.length
-                    : filteredRecordsCancelled.length,
-                itemBuilder: (context, index) {
-                  final record = searchText.isEmpty
-                      ? cancelledRecords[index]
-                      : filteredRecordsCancelled[index];
-                  return buildAllLeaveTile(
-                    _getBreakdown(record['start_date_breakdown']),
-                    record,
-                    baseUrl,
-                    record['employee_id']['full_name'],
-                    record['employee_id']['employee_profile'] ?? "",
-                    record['employee_id']['badge_id'] ?? "",
-                    _getStateInfo(record['status']),
-                    record['id'].toString(),
-                  );
-                },
+                  itemCount: (searchText.isEmpty ? cancelledRecords.length : filteredRecordsCancelled.length) +
+                      (isFetchingMore ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index == (searchText.isEmpty ? cancelledRecords.length : filteredRecordsCancelled.length)) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final record = searchText.isEmpty ? cancelledRecords[index] : filteredRecordsCancelled[index];
+                    return buildAllLeaveTile(
+                      _getBreakdown(record['start_date_breakdown']),
+                      record,
+                      baseUrl,
+                      getToken,
+                      record['employee_id']['full_name'],
+                      record['employee_id']['employee_profile'] ?? "",
+                      record['employee_id']['badge_id'] ?? "",
+                      _getStateInfo(record['status']),
+                      record['id'].toString(),
+                    );
+                  }
               ),
             ),
           ),
@@ -3498,24 +3467,28 @@ class _LeaveRequest extends State<LeaveRequest>
               child: ListView.builder(
                 controller: _scrollController,
                 shrinkWrap: true,
-                itemCount: searchText.isEmpty
-                    ? rejectedRecords.length
-                    : filteredRecordsRejected.length,
-                itemBuilder: (context, index) {
-                  final record = searchText.isEmpty
-                      ? rejectedRecords[index]
-                      : filteredRecordsRejected[index];
-                  return buildAllLeaveTile(
-                    _getBreakdown(record['start_date_breakdown']),
-                    record,
-                    baseUrl,
-                    record['employee_id']['full_name'],
-                    record['employee_id']['employee_profile'] ?? "",
-                    record['employee_id']['badge_id'] ?? "",
-                    _getStateInfo(record['status']),
-                    record['id'].toString(),
-                  );
-                },
+                  itemCount: (searchText.isEmpty ? rejectedRecords.length : filteredRecordsRejected.length) +
+                      (isFetchingMore ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index == (searchText.isEmpty ? rejectedRecords.length : filteredRecordsRejected.length)) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final record = searchText.isEmpty ? rejectedRecords[index] : filteredRecordsRejected[index];
+                    return buildAllLeaveTile(
+                      _getBreakdown(record['start_date_breakdown']),
+                      record,
+                      baseUrl,
+                      getToken,
+                      record['employee_id']['full_name'],
+                      record['employee_id']['employee_profile'] ?? "",
+                      record['employee_id']['badge_id'] ?? "",
+                      _getStateInfo(record['status']),
+                      record['id'].toString(),
+                    );
+                  }
               ),
             ),
           ),
@@ -3523,7 +3496,7 @@ class _LeaveRequest extends State<LeaveRequest>
     );
   }
 
-  Widget buildAllLeaveTile(breakdown, Map<String, dynamic> record, baseUrl,
+  Widget buildAllLeaveTile(breakdown, Map<String, dynamic> record, baseUrl,token,
       fullName, String badgeId, String profile, stateInfo, String recordId) {
     return GestureDetector(
       onTap: () async {
@@ -3580,6 +3553,9 @@ class _LeaveRequest extends State<LeaveRequest>
                                           baseUrl +
                                               record['employee_id']
                                               ['employee_profile'],
+                                          headers: {
+                                            "Authorization": "Bearer $token",
+                                          },
                                           fit: BoxFit.cover,
                                           errorBuilder: (BuildContext context,
                                               Object exception,
@@ -3786,7 +3762,8 @@ class _LeaveRequest extends State<LeaveRequest>
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) =>
-                                            ImageViewer(imagePath: pdfPath),
+                                            ImageViewer(imagePath: pdfPath,
+                                              token: getToken,),
                                       ),
                                     );
                                   } else {
@@ -4193,6 +4170,9 @@ class _LeaveRequest extends State<LeaveRequest>
                                     baseUrl +
                                         record['employee_id']
                                         ['employee_profile'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -4819,8 +4799,10 @@ StateInfo _getStateInfo(String state) {
 
 class ImageViewer extends StatelessWidget {
   final String imagePath;
+  final String token;
 
-  const ImageViewer({super.key, required this.imagePath});
+
+  const ImageViewer({super.key, required this.imagePath, required this.token});
 
   @override
   Widget build(BuildContext context) {
@@ -4839,6 +4821,9 @@ class ImageViewer extends StatelessWidget {
         child: isNetworkImage
             ? Image.network(
           imagePath,
+          headers: {
+            "Authorization": "Bearer $token",
+          },
           errorBuilder: (context, error, stackTrace) {
             return const Text(
               'Error loading image',

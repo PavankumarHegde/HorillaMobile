@@ -33,6 +33,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
   int maxCount = 5;
   late Map<String, dynamic> arguments;
   late String baseUrl = '';
+  late String getToken = '';
   bool isLoading = true;
   bool _isShimmer = true;
   bool hasMore = true;
@@ -47,6 +48,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
     prefetchData();
     getEmployeeDetails();
     getBaseUrl();
+    fetchToken();
   }
 
   void _scrollListener() {
@@ -71,6 +73,14 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
     var typedServerUrl = prefs.getString("typed_url");
     setState(() {
       baseUrl = typedServerUrl ?? '';
+    });
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
     });
   }
 
@@ -181,7 +191,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
     return Color((hashCode & 0xFFFFFF).toInt()).withOpacity(1.0);
   }
 
-  Widget buildListItem(Map<String, dynamic> record, baseUrl) {
+  Widget buildListItem(Map<String, dynamic> record, baseUrl, token) {
     String position = record['job_position_name'] ?? 'Unknown';
     Color positionColor = _getColorForPosition(position);
     return Column(
@@ -208,9 +218,11 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
                     child: ClipOval(
                       child: Image.network(
                         baseUrl + record['employee_profile'],
+                        headers: {
+                          "Authorization": "Bearer $token",
+                        },
                         fit: BoxFit.cover,
-                        errorBuilder: (BuildContext context, Object exception,
-                            StackTrace? stackTrace) {
+                        errorBuilder: (BuildContext context, Object exception, StackTrace? stackTrace) {
                           return const Icon(Icons.person);
                         },
                       ),
@@ -515,7 +527,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
                           final record = searchText.isEmpty
                               ? requests[index]
                               : filteredRecords[index];
-                          return buildListItem(record, baseUrl);
+                          return buildListItem(record, baseUrl, getToken);
                         },
                       ),
                     ),

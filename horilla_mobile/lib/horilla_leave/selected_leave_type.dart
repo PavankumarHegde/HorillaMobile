@@ -42,6 +42,8 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
   bool permissionLeaveOverviewCheck = false;
   bool permissionMyLeaveRequestCheck = false;
   bool permissionLeaveAllocationCheck = false;
+  late String getToken = '';
+
 
   @override
   void initState() {
@@ -52,6 +54,15 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
     getBaseUrl();
     getEmployees();
     prefetchData();
+    fetchToken();
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
   }
 
   Future<void> checkPermissions() async {
@@ -284,28 +295,43 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    for (var page = 1;; page++) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/employee/employee-selector?page=$page');
+
+    employeeItems.clear();
+    employeeItemsId.clear();
+
+    int page = 1;
+    bool hasMore = true;
+
+    while (hasMore) {
+      var uri = Uri.parse('$typedServerUrl/api/employee/employee-selector?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
 
       if (response.statusCode == 200) {
+        var data = jsonDecode(response.body);
+        var results = data['results'];
+
+        if (results.isEmpty) {
+          hasMore = false;
+          break;
+        }
+
         setState(() {
-          var results = jsonDecode(response.body)['results'];
-          if (results.isEmpty) {}
           for (var employee in results) {
-            String fullName =
-                "${employee['employee_first_name']} ${employee['employee_last_name']}";
+            String fullName = "${employee['employee_first_name'] ?? ''} ${employee['employee_last_name'] ?? ''}".trim();
             employeeItems.add(fullName);
             employeeItemsId.add(employee['id']);
           }
         });
-      } else if (response.statusCode == 404) {
-        break;
-      } else {}
+
+        page++;
+      } else {
+        // Stop on any unexpected status code (not 200)
+        print("Error fetching employees: ${response.statusCode}");
+        hasMore = false;
+      }
     }
   }
 
@@ -424,19 +450,17 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
                         ),
                         child: Stack(
                           children: [
-                            if (typeDetails['icon'] != null &&
-                                typeDetails['icon'].isNotEmpty)
+                            if (typeDetails['icon'] != null && typeDetails['icon'].isNotEmpty)
                               Positioned.fill(
                                 child: ClipOval(
                                   child: Image.network(
                                     baseUrl + typeDetails['icon'],
+                                    headers: {
+                                      "Authorization": "Bearer $getToken", // Changed from token to getToken
+                                    },
                                     fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(
-                                          Icons.calendar_month_outlined,
-                                          color: Colors.grey);
+                                    errorBuilder: (BuildContext context, Object exception, StackTrace? stackTrace) {
+                                      return const Icon(Icons.calendar_month_outlined, color: Colors.grey);
                                     },
                                   ),
                                 ),

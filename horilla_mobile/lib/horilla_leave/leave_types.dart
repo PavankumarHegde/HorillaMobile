@@ -28,6 +28,8 @@ class _LeaveTypes extends State<LeaveTypes> {
   bool permissionLeaveAllocationCheck = false;
   late String baseUrl = '';
   late Map<String, dynamic> arguments;
+  late String getToken = '';
+
 
   @override
   void dispose() {
@@ -48,6 +50,7 @@ class _LeaveTypes extends State<LeaveTypes> {
     getLeaveType();
     getBaseUrl();
     prefetchData();
+    fetchToken();
   }
 
   Future<void> checkPermissions() async {
@@ -56,6 +59,15 @@ class _LeaveTypes extends State<LeaveTypes> {
     await permissionLeaveRequestChecks();
     await permissionLeaveAssignChecks();
   }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
+  }
+
 
   Future<void> permissionLeaveOverviewChecks() async {
     final prefs = await SharedPreferences.getInstance();
@@ -271,7 +283,7 @@ class _LeaveTypes extends State<LeaveTypes> {
             itemBuilder: (context, index) {
               final record = leaveType[index];
               if (record['name'] != null) {
-                return buildListItem(context, baseUrl, record);
+                return buildListItem(context, baseUrl, record, getToken,);
               } else {
                 return Container();
               }
@@ -471,7 +483,7 @@ Widget shimmerListTile() {
 }
 
 Widget buildListItem(
-    BuildContext context, baseUrl, Map<String, dynamic> record) {
+    BuildContext context, baseUrl, Map<String, dynamic> record, token) {
   return Padding(
     padding: const EdgeInsets.all(8.0),
     child: GestureDetector(
@@ -513,6 +525,9 @@ Widget buildListItem(
                     child: ClipOval(
                       child: Image.network(
                         baseUrl + record['icon'],
+                        headers: {
+                          "Authorization": "Bearer $token",
+                        },
                         fit: BoxFit.cover,
                         errorBuilder: (BuildContext context, Object exception,
                             StackTrace? stackTrace) {

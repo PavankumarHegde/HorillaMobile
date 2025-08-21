@@ -49,6 +49,13 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
   bool permissionAttendanceRequest = false;
   bool permissionHourAccount = false;
 
+  bool _drawerPermissionOverview = false;
+  bool _drawerPermissionAttendance = false;
+  bool _drawerPermissionAttendanceRequest = false;
+  bool _drawerPermissionHourAccount = false;
+  bool _isPermissionCheckComplete = false;
+  late String getToken = '';
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +70,21 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
     getAllNonValidatedAttendance();
     getBaseUrl();
     _simulateLoading();
+    loadPermissionsFromStorage();
+    fetchToken();
+  }
+
+  Future loadPermissionsFromStorage() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _drawerPermissionOverview = prefs.getBool("perm_overview") ?? false;
+      _drawerPermissionAttendance = prefs.getBool("perm_attendance") ?? false;
+      _drawerPermissionAttendanceRequest =
+          prefs.getBool("perm_attendance_request") ?? false;
+      _drawerPermissionHourAccount =
+          prefs.getBool("perm_hour_account") ?? false;
+      _isPermissionCheckComplete = true;
+    });
   }
 
   Future<void> _simulateLoading() async {
@@ -87,27 +109,35 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
       baseUrl = typedServerUrl ?? '';
     });
   }
-  Future<void> permissionChecks() async {
 
+  Future<void> permissionChecks() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
     var uri =
-    Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      permissionCheck = true;
-      permissionOverview = true;
-      permissionAttendance = true;
-      permissionAttendanceRequest = true;
-      permissionHourAccount = true;
-    }
-    else{
-      permissionAttendanceRequest = true;
-      permissionHourAccount = true;
+        Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance');
+
+    try {
+      var response = await http.get(uri, headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer $token",
+      });
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _drawerPermissionOverview = true;
+          _drawerPermissionAttendance = true;
+          _drawerPermissionAttendanceRequest = true;
+          _drawerPermissionHourAccount = true;
+        });
+      } else {
+        setState(() {
+          _drawerPermissionAttendanceRequest = true;
+          _drawerPermissionHourAccount = true;
+        });
+      }
+    } catch (e) {
+      print('Error checking permissions: $e');
     }
   }
 
@@ -148,6 +178,14 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
         'employee_profile': responseData['employee_profile']
       };
     }
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
   }
 
   Future<void> getAllOfflineEmployees(int page) async {
@@ -206,7 +244,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
     var uri =
-    Uri.parse('$typedServerUrl/api/attendance/offline-employees/count/');
+        Uri.parse('$typedServerUrl/api/attendance/offline-employees/count/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -252,7 +290,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
 
   void _scrollListener() {
     if (_scrollController.offset >=
-        _scrollController.position.maxScrollExtent &&
+            _scrollController.position.maxScrollExtent &&
         !_scrollController.position.outOfRange) {
       currentPage++;
       getAllOvertimeValidateEmployees();
@@ -332,164 +370,136 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
         ),
       ),
       body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-        child: _isShimmerVisible
-            ? _buildLoadingWidget()
-            : _buildAttendanceOverview(),
-      ),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: _isShimmerVisible
+              ? _buildLoadingWidget()
+              : _buildAttendanceOverview()),
       drawer: Drawer(
-        child: FutureBuilder<void>(
-          future: permissionChecks(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return ListView(
-                padding: const EdgeInsets.all(0),
-                children: [
-                  DrawerHeader(
-                    decoration: const BoxDecoration(),
-                    child: FittedBox(
-                      fit: BoxFit.contain,
-                      child: SizedBox(
-                        width: 80,
-                        height: 80,
-                        child: Image.asset(
-                          'Assets/horilla-logo.png',
-                        ),
+        child: ListView(
+          padding: const EdgeInsets.all(0),
+          children: [
+            DrawerHeader(
+              decoration: const BoxDecoration(),
+              child: FittedBox(
+                fit: BoxFit.contain,
+                child: SizedBox(
+                  width: 80,
+                  height: 80,
+                  child: Image.asset('Assets/horilla-logo.png'),
+                ),
+              ),
+            ),
+            _isPermissionCheckComplete
+                ? Column(
+                    children: [
+                      _drawerPermissionOverview
+                          ? ListTile(
+                              title: const Text('Overview'),
+                              onTap: () {
+                                Navigator.pushNamed(
+                                    context, '/attendance_overview');
+                              },
+                            )
+                          : const SizedBox.shrink(),
+                      ListTile(
+                        title: const Text('Attendance'),
+                        onTap: () {
+                          Navigator.pushNamed(
+                              context, '/attendance_attendance');
+                        },
                       ),
-                    ),
-                  ),
-                  shimmerListTile(),
-                  shimmerListTile(),
-                  shimmerListTile(),
-                  shimmerListTile(),
-                ],
-              );
-            } else if (snapshot.hasError) {
-              return const Center(child: Text('Error loading permissions.'));
-            } else {
-              return ListView(
-                padding: const EdgeInsets.all(0),
-                children: [
-                  DrawerHeader(
-                    decoration: const BoxDecoration(),
-                    child: FittedBox(
-                      fit: BoxFit.contain,
-                      child: SizedBox(
-                        width: 80,
-                        height: 80,
-                        child: Image.asset(
-                          'Assets/horilla-logo.png',
-                        ),
+                      ListTile(
+                        title: const Text('Attendance Request'),
+                        onTap: () {
+                          Navigator.pushNamed(context, '/attendance_request');
+                        },
                       ),
-                    ),
+                      ListTile(
+                        title: const Text('Hour Account'),
+                        onTap: () {
+                          Navigator.pushNamed(
+                              context, '/employee_hour_account');
+                        },
+                      ),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      shimmerListTile(),
+                      shimmerListTile(),
+                      shimmerListTile(),
+                      shimmerListTile(),
+                    ],
                   ),
-                  permissionOverview
-                      ? ListTile(
-                    title: const Text('Overview'),
-                    onTap: () {
-                      Navigator.pushNamed(context, '/attendance_overview');
-                    },
-                  )
-                      : const SizedBox.shrink(),
-
-                  permissionAttendance
-                      ? ListTile(
-                    title: const Text('Attendance'),
-                    onTap: () {
-                      Navigator.pushNamed(context, '/attendance_attendance');
-                    },
-                  )
-                      : const SizedBox.shrink(),
-
-                  permissionAttendanceRequest
-                      ? ListTile(
-                    title: const Text('Attendance Request'),
-                    onTap: () {
-                      Navigator.pushNamed(context, '/attendance_request');
-                    },
-                  )
-                      : const SizedBox.shrink(),
-
-                  permissionHourAccount
-                      ? ListTile(
-                    title: const Text('Hour Account'),
-                    onTap: () {
-                      Navigator.pushNamed(context, '/employee_hour_account');
-                    },
-                  )
-                      : const SizedBox.shrink(),
-
-                ],
-              );
-            }
-          },
+          ],
         ),
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
           ? AnimatedNotchBottomBar(
-        /// Provide NotchBottomBarController
-        notchBottomBarController: _controller,
-        color: Colors.red,
-        showLabel: true,
-        notchColor: Colors.red,
-        kBottomRadius: 28.0,
-        kIconSize: 24.0,
+              /// Provide NotchBottomBarController
+              notchBottomBarController: _controller,
+              color: Colors.red,
+              showLabel: true,
+              notchColor: Colors.red,
+              kBottomRadius: 28.0,
+              kIconSize: 24.0,
 
-        /// restart app if you change removeMargins
-        removeMargins: false,
-        bottomBarWidth: MediaQuery.of(context).size.width * 1,
-        durationInMilliSeconds: 300,
-        bottomBarItems: const [
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
-            ),
-            activeItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
-            ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
-            ),
-            activeItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
-            ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-            activeItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-          ),
-        ],
+              /// restart app if you change removeMargins
+              removeMargins: false,
+              bottomBarWidth: MediaQuery.of(context).size.width * 1,
+              durationInMilliSeconds: 300,
+              bottomBarItems: const [
+                BottomBarItem(
+                  inActiveItem: Icon(
+                    Icons.home_filled,
+                    color: Colors.white,
+                  ),
+                  activeItem: Icon(
+                    Icons.home_filled,
+                    color: Colors.white,
+                  ),
+                ),
+                BottomBarItem(
+                  inActiveItem: Icon(
+                    Icons.update_outlined,
+                    color: Colors.white,
+                  ),
+                  activeItem: Icon(
+                    Icons.update_outlined,
+                    color: Colors.white,
+                  ),
+                ),
+                BottomBarItem(
+                  inActiveItem: Icon(
+                    Icons.person,
+                    color: Colors.white,
+                  ),
+                  activeItem: Icon(
+                    Icons.person,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
 
-        onTap: (index) async {
-          switch (index) {
-            case 0:
-              Navigator.pushNamed(context, '/home');
-              break;
-            case 1:
-              Navigator.pushNamed(context, '/employee_checkin_checkout');
-              break;
-            case 2:
-              Navigator.pushNamed(context, '/employees_form',
-                  arguments: arguments);
-              break;
-          }
-        },
-      )
+              onTap: (index) async {
+                switch (index) {
+                  case 0:
+                    Navigator.pushNamed(context, '/home');
+                    break;
+                  case 1:
+                    Navigator.pushNamed(context, '/employee_checkin_checkout');
+                    break;
+                  case 2:
+                    Navigator.pushNamed(context, '/employees_form',
+                        arguments: arguments);
+                    break;
+                }
+              },
+            )
           : null,
     );
   }
+
   Widget shimmerListTile() {
     return Shimmer.fromColors(
       baseColor: Colors.grey[300]!,
@@ -620,7 +630,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                                     decoration: BoxDecoration(
                                       color: Colors.white,
                                       border:
-                                      Border.all(color: Colors.grey[50]!),
+                                          Border.all(color: Colors.grey[50]!),
                                       borderRadius: BorderRadius.circular(8.0),
                                       boxShadow: [
                                         BoxShadow(
@@ -637,7 +647,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                                         side: const BorderSide(
                                             color: Colors.white, width: 0.0),
                                         borderRadius:
-                                        BorderRadius.circular(10.0),
+                                            BorderRadius.circular(10.0),
                                       ),
                                       color: Colors.white,
                                       elevation: 0.1,
@@ -645,9 +655,9 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                                         padding: const EdgeInsets.all(8.0),
                                         child: Column(
                                           mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
+                                              MainAxisAlignment.spaceBetween,
                                           crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                              CrossAxisAlignment.start,
                                           children: [
                                             const Row(
                                               children: [
@@ -659,8 +669,8 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                                             ),
                                             SizedBox(
                                                 height: MediaQuery.of(context)
-                                                    .size
-                                                    .height *
+                                                        .size
+                                                        .height *
                                                     0.005),
                                             const SizedBox(height: 10),
                                             Container(
@@ -707,7 +717,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
+                        const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 2,
                       crossAxisSpacing: 5.0,
                       mainAxisSpacing: 5.0,
@@ -746,7 +756,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                   children: [
                     Padding(
                       padding:
-                      EdgeInsets.symmetric(horizontal: deviceWidth * 0.04),
+                          EdgeInsets.symmetric(horizontal: deviceWidth * 0.04),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -822,39 +832,43 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                           Expanded(
                             child: getCurrentPageOfflineEmployees().isEmpty
                                 ? const Center(
-                              child: Column(
-                                mainAxisAlignment:
-                                MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.person_off,
-                                    color: Colors.black,
-                                    size: 92,
-                                  ),
-                                  SizedBox(height: 20),
-                                  Text(
-                                    'There are no offline employees to display',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18,
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.person_off,
+                                          color: Colors.black,
+                                          size: 92,
+                                        ),
+                                        SizedBox(height: 20),
+                                        Text(
+                                          'There are no offline employees to display',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 18,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ),
-                                ],
-                              ),
-                            )
+                                  )
                                 : ListView.builder(
-                              itemCount:
-                              getCurrentPageOfflineEmployees().length,
-                              itemBuilder: (context, index) {
-                                final record =
-                                getCurrentPageOfflineEmployees()[
-                                index];
-                                final leaveStatus =
-                                    record['leave_status'] ?? 'Unknown';
-                                return buildOfflineEmployeesTile(record,
-                                    leaveStatus, baseUrl, context);
-                              },
-                            ),
+                                    itemCount:
+                                        getCurrentPageOfflineEmployees().length,
+                                    itemBuilder: (context, index) {
+                                      final record =
+                                          getCurrentPageOfflineEmployees()[
+                                              index];
+                                      final leaveStatus =
+                                          record['leave_status'] ?? 'Unknown';
+                                      return buildOfflineEmployeesTile(
+                                          record,
+                                          leaveStatus,
+                                          baseUrl,
+                                          getToken,
+                                          context);
+                                    },
+                                  ),
                           ),
                         ],
                       ),
@@ -885,52 +899,53 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                     children: [
                       overtimeValidate == 0
                           ? const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.inventory_outlined,
-                              color: Colors.black,
-                              size: 92,
-                            ),
-                            SizedBox(height: 20),
-                            Text(
-                              "There are no attendance records to display",
-                              style: TextStyle(
-                                  fontSize: 16.0,
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      )
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.inventory_outlined,
+                                    color: Colors.black,
+                                    size: 92,
+                                  ),
+                                  SizedBox(height: 20),
+                                  Text(
+                                    "There are no attendance records to display",
+                                    style: TextStyle(
+                                        fontSize: 16.0,
+                                        color: Colors.black,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            )
                           : buildOvertimeValidate(requestsOvertimeValidate,
-                          baseUrl, _scrollController),
+                              baseUrl, _scrollController, getToken),
                       nonValidated == 0
                           ? const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.inventory_outlined,
-                              color: Colors.black,
-                              size: 92,
-                            ),
-                            SizedBox(height: 20),
-                            Text(
-                              "There are no attendance records to display",
-                              style: TextStyle(
-                                  fontSize: 16.0,
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      )
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.inventory_outlined,
+                                    color: Colors.black,
+                                    size: 92,
+                                  ),
+                                  SizedBox(height: 20),
+                                  Text(
+                                    "There are no attendance records to display",
+                                    style: TextStyle(
+                                        fontSize: 16.0,
+                                        color: Colors.black,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            )
                           : buildNonValidatedAttendance(
-                          requestsNonValidAttendance,
-                          baseUrl,
-                          _scrollController)
+                              requestsNonValidAttendance,
+                              baseUrl,
+                              _scrollController,
+                              getToken),
                     ],
                   ),
                 ),
@@ -993,7 +1008,7 @@ Widget _buildGridItem(
 }
 
 Widget buildOfflineEmployeesTile(
-    record, leaveStatus, baseUrl, BuildContext context) {
+    record, leaveStatus, baseUrl, token, BuildContext context) {
   return Column(
     children: [
       ListTile(
@@ -1008,6 +1023,9 @@ Widget buildOfflineEmployeesTile(
                   child: ClipOval(
                     child: Image.network(
                       baseUrl + record['employee_profile'],
+                      headers: {
+                        "Authorization": "Bearer $token",
+                      },
                       fit: BoxFit.cover,
                       errorBuilder: (BuildContext context, Object exception,
                           StackTrace? stackTrace) {
@@ -1109,6 +1127,9 @@ void _showEmailDialog(
                           child: ClipOval(
                             child: Image.network(
                               baseUrl + record['employee_profile'],
+                              // headers: {
+                              //   "Authorization": "Bearer $token",
+                              // },
                               fit: BoxFit.cover,
                               errorBuilder: (BuildContext context,
                                   Object exception, StackTrace? stackTrace) {
@@ -1156,17 +1177,17 @@ void _showEmailDialog(
                       value: selectedTemplate,
                       items: templateItems.isNotEmpty
                           ? templateItems.entries.map((entry) {
-                        return DropdownMenuItem<String>(
-                          value: entry.key,
-                          child: Text(entry.value),
-                        );
-                      }).toList()
+                              return DropdownMenuItem<String>(
+                                value: entry.key,
+                                child: Text(entry.value),
+                              );
+                            }).toList()
                           : [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text(" "),
-                        )
-                      ],
+                              const DropdownMenuItem(
+                                value: null,
+                                child: Text(" "),
+                              )
+                            ],
                       onChanged: (newValue) async {
                         setState(() {
                           selectedTemplate = newValue;
@@ -1174,7 +1195,7 @@ void _showEmailDialog(
 
                         if (selectedTemplate != null) {
                           String fetchedBodyContent =
-                          await getConvertedMailTemplate(
+                              await getConvertedMailTemplate(
                             selectedTemplate!,
                             record['id'].toString(),
                           );
@@ -1284,7 +1305,7 @@ Future<Map<String, String>> getTemplate() async {
   });
   if (response.statusCode == 200) {
     List<Map<String, dynamic>> templateList =
-    List<Map<String, dynamic>>.from(jsonDecode(response.body));
+        List<Map<String, dynamic>>.from(jsonDecode(response.body));
 
     Map<String, String> templateMap = {};
 
@@ -1307,7 +1328,7 @@ Future<void> sendEmail(
   var typedServerUrl = prefs.getString("typed_url");
 
   var uri =
-  Uri.parse('$typedServerUrl/api/attendance/offline-employee-mail-send');
+      Uri.parse('$typedServerUrl/api/attendance/offline-employee-mail-send');
 
   var request = http.MultipartRequest('POST', uri);
 
@@ -1325,7 +1346,8 @@ Future<void> sendEmail(
 Widget buildOvertimeValidate(
     List<Map<String, dynamic>> requestsOvertimeValidate,
     baseUrl,
-    scrollController) {
+    scrollController,
+    token) {
   return Padding(
     padding: const EdgeInsets.all(8.0),
     child: ListView.builder(
@@ -1366,7 +1388,7 @@ Widget buildOvertimeValidate(
                               children: [
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     Container(
                                       width: 40.0,
@@ -1379,7 +1401,7 @@ Widget buildOvertimeValidate(
                                       child: Stack(
                                         children: [
                                           if (record['employee_profile_url'] !=
-                                              null &&
+                                                  null &&
                                               record['employee_profile_url']
                                                   .isNotEmpty)
                                             Positioned.fill(
@@ -1387,10 +1409,14 @@ Widget buildOvertimeValidate(
                                                 child: Image.network(
                                                   baseUrl +
                                                       record[
-                                                      'employee_profile_url'],
+                                                          'employee_profile_url'],
+                                                  headers: {
+                                                    "Authorization":
+                                                        "Bearer $token",
+                                                  },
                                                   fit: BoxFit.cover,
                                                   errorBuilder: (BuildContext
-                                                  context,
+                                                          context,
                                                       Object exception,
                                                       StackTrace? stackTrace) {
                                                     return const Icon(
@@ -1401,7 +1427,7 @@ Widget buildOvertimeValidate(
                                               ),
                                             ),
                                           if (record['employee_profile_url'] ==
-                                              null ||
+                                                  null ||
                                               record['employee_profile_url']
                                                   .isEmpty)
                                             Positioned.fill(
@@ -1418,16 +1444,16 @@ Widget buildOvertimeValidate(
                                     ),
                                     SizedBox(
                                         width:
-                                        MediaQuery.of(context).size.width *
-                                            0.01),
+                                            MediaQuery.of(context).size.width *
+                                                0.01),
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(
                                             (record['employee_first_name'] ??
-                                                '') +
+                                                    '') +
                                                 (record['employee_last_name'] ??
                                                     ''),
                                             style: const TextStyle(
@@ -1453,19 +1479,19 @@ Widget buildOvertimeValidate(
                                           decoration: BoxDecoration(
                                             color: Colors.grey[200],
                                             borderRadius:
-                                            BorderRadius.circular(4.0),
+                                                BorderRadius.circular(4.0),
                                           ),
                                         ),
                                         SizedBox(
                                             width: MediaQuery.of(context)
-                                                .size
-                                                .width *
+                                                    .size
+                                                    .width *
                                                 0.008),
                                         Container(
                                           decoration: BoxDecoration(
                                             color: Colors.grey[200],
                                             borderRadius:
-                                            BorderRadius.circular(4.0),
+                                                BorderRadius.circular(4.0),
                                           ),
                                         ),
                                       ],
@@ -1477,7 +1503,7 @@ Widget buildOvertimeValidate(
                                         0.03),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Attendance Date',
@@ -1494,7 +1520,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check In',
@@ -1512,7 +1538,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check In Date',
@@ -1530,7 +1556,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check Out ',
@@ -1548,7 +1574,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check Out Date',
@@ -1566,7 +1592,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Shift',
@@ -1583,7 +1609,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Work Type',
@@ -1603,7 +1629,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'At Work',
@@ -1621,7 +1647,7 @@ Widget buildOvertimeValidate(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Min Hour',
@@ -1688,7 +1714,7 @@ Widget buildOvertimeValidate(
                                 child: Stack(
                                   children: [
                                     if (record['employee_profile_url'] !=
-                                        null &&
+                                            null &&
                                         record['employee_profile_url']
                                             .isNotEmpty)
                                       Positioned.fill(
@@ -1696,6 +1722,9 @@ Widget buildOvertimeValidate(
                                           child: Image.network(
                                             baseUrl +
                                                 record['employee_profile_url'],
+                                            headers: {
+                                              "Authorization": "Bearer $token",
+                                            },
                                             fit: BoxFit.cover,
                                             errorBuilder: (BuildContext context,
                                                 Object exception,
@@ -1707,7 +1736,7 @@ Widget buildOvertimeValidate(
                                         ),
                                       ),
                                     if (record['employee_profile_url'] ==
-                                        null ||
+                                            null ||
                                         record['employee_profile_url'].isEmpty)
                                       Positioned.fill(
                                         child: Container(
@@ -1723,7 +1752,7 @@ Widget buildOvertimeValidate(
                               ),
                               SizedBox(
                                   width:
-                                  MediaQuery.of(context).size.width * 0.01),
+                                      MediaQuery.of(context).size.width * 0.01),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1751,7 +1780,7 @@ Widget buildOvertimeValidate(
                           ),
                           SizedBox(
                               height:
-                              MediaQuery.of(context).size.height * 0.005),
+                                  MediaQuery.of(context).size.height * 0.005),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -1775,7 +1804,7 @@ Widget buildOvertimeValidate(
                           ),
                           SizedBox(
                               height:
-                              MediaQuery.of(context).size.height * 0.02),
+                                  MediaQuery.of(context).size.height * 0.02),
                         ],
                       ),
                     ),
@@ -1793,6 +1822,7 @@ Widget buildOvertimeValidate(
 Widget buildNonValidatedAttendance(
     List<Map<String, dynamic>> requestsNonValidAttendance,
     baseUrl,
+    token,
     scrollController) {
   return Padding(
     padding: const EdgeInsets.all(8.0),
@@ -1834,7 +1864,7 @@ Widget buildNonValidatedAttendance(
                               children: [
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     Container(
                                       width: 40.0,
@@ -1847,7 +1877,7 @@ Widget buildNonValidatedAttendance(
                                       child: Stack(
                                         children: [
                                           if (record['employee_profile_url'] !=
-                                              null &&
+                                                  null &&
                                               record['employee_profile_url']
                                                   .isNotEmpty)
                                             Positioned.fill(
@@ -1855,10 +1885,14 @@ Widget buildNonValidatedAttendance(
                                                 child: Image.network(
                                                   baseUrl +
                                                       record[
-                                                      'employee_profile_url'],
+                                                          'employee_profile_url'],
+                                                  headers: {
+                                                    "Authorization":
+                                                        "Bearer $token",
+                                                  },
                                                   fit: BoxFit.cover,
                                                   errorBuilder: (BuildContext
-                                                  context,
+                                                          context,
                                                       Object exception,
                                                       StackTrace? stackTrace) {
                                                     return const Icon(
@@ -1869,7 +1903,7 @@ Widget buildNonValidatedAttendance(
                                               ),
                                             ),
                                           if (record['employee_profile_url'] ==
-                                              null ||
+                                                  null ||
                                               record['employee_profile_url']
                                                   .isEmpty)
                                             Positioned.fill(
@@ -1886,16 +1920,16 @@ Widget buildNonValidatedAttendance(
                                     ),
                                     SizedBox(
                                         width:
-                                        MediaQuery.of(context).size.width *
-                                            0.01),
+                                            MediaQuery.of(context).size.width *
+                                                0.01),
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(
                                             (record['employee_first_name'] ??
-                                                '') +
+                                                    '') +
                                                 (record['employee_last_name'] ??
                                                     ''),
                                             style: const TextStyle(
@@ -1921,19 +1955,19 @@ Widget buildNonValidatedAttendance(
                                           decoration: BoxDecoration(
                                             color: Colors.grey[200],
                                             borderRadius:
-                                            BorderRadius.circular(4.0),
+                                                BorderRadius.circular(4.0),
                                           ),
                                         ),
                                         SizedBox(
                                             width: MediaQuery.of(context)
-                                                .size
-                                                .width *
+                                                    .size
+                                                    .width *
                                                 0.008),
                                         Container(
                                           decoration: BoxDecoration(
                                             color: Colors.grey[200],
                                             borderRadius:
-                                            BorderRadius.circular(4.0),
+                                                BorderRadius.circular(4.0),
                                           ),
                                         ),
                                       ],
@@ -1945,7 +1979,7 @@ Widget buildNonValidatedAttendance(
                                         0.03),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Attendance Date',
@@ -1962,7 +1996,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check In',
@@ -1980,7 +2014,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check In Date',
@@ -1998,7 +2032,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check Out ',
@@ -2016,7 +2050,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Check Out Date',
@@ -2034,7 +2068,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Shift',
@@ -2051,7 +2085,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Work Type',
@@ -2068,7 +2102,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'At Work',
@@ -2086,7 +2120,7 @@ Widget buildNonValidatedAttendance(
                                         0.01),
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Min Hour',
@@ -2153,7 +2187,7 @@ Widget buildNonValidatedAttendance(
                                 child: Stack(
                                   children: [
                                     if (record['employee_profile_url'] !=
-                                        null &&
+                                            null &&
                                         record['employee_profile_url']
                                             .isNotEmpty)
                                       Positioned.fill(
@@ -2161,6 +2195,9 @@ Widget buildNonValidatedAttendance(
                                           child: Image.network(
                                             baseUrl +
                                                 record['employee_profile_url'],
+                                            headers: {
+                                              "Authorization": "Bearer $token",
+                                            },
                                             fit: BoxFit.cover,
                                             errorBuilder: (BuildContext context,
                                                 Object exception,
@@ -2172,7 +2209,7 @@ Widget buildNonValidatedAttendance(
                                         ),
                                       ),
                                     if (record['employee_profile_url'] ==
-                                        null ||
+                                            null ||
                                         record['employee_profile_url'].isEmpty)
                                       Positioned.fill(
                                         child: Container(
@@ -2188,7 +2225,7 @@ Widget buildNonValidatedAttendance(
                               ),
                               SizedBox(
                                   width:
-                                  MediaQuery.of(context).size.width * 0.01),
+                                      MediaQuery.of(context).size.width * 0.01),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2216,7 +2253,7 @@ Widget buildNonValidatedAttendance(
                           ),
                           SizedBox(
                               height:
-                              MediaQuery.of(context).size.height * 0.005),
+                                  MediaQuery.of(context).size.height * 0.005),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -2240,7 +2277,7 @@ Widget buildNonValidatedAttendance(
                           ),
                           SizedBox(
                               height:
-                              MediaQuery.of(context).size.height * 0.02),
+                                  MediaQuery.of(context).size.height * 0.02),
                         ],
                       ),
                     ),

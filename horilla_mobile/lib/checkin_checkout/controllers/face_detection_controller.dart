@@ -2,45 +2,28 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:developer';
 import 'package:camera/camera.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_face_api_beta/flutter_face_api.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:odoo_rpc/odoo_rpc.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../../../res/utilities/alertDialogs.dart';
-import '../../res/utilities/snackBar.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter_face_api/flutter_face_api.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class FaceScannerController {
   late CameraController cameraController;
   late CameraDescription selectedCamera;
-  late OdooClient client;
-  Position? currentLocation;
+
   var faceSdk = FaceSDK.instance;
-  MatchFacesImage? storedFaceImage;
-  Map<String, dynamic>? employeeDetails;
+
   bool _isInitialized = false;
 
-  Future<void> initializeFaceSDK() async {
+  Future initializeCamera() async {
     try {
-      final result = await faceSdk.initialize();
-      final success = result.$1;
-      final error = result.$2;
-
-      if (!success) {
-        throw Exception("Face SDK initialization failed: ${error?.message}");
+      final status = await Permission.camera.request();
+      if (!status.isGranted) {
+        throw Exception('Camera permission not granted');
       }
-      log('Face SDK initialized successfully');
-    } catch (e) {
-      log('Error initializing Face SDK: $e');
-      rethrow;
-    }
-  }
 
-  Future<void> initializeCamera() async {
-    try {
       final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        throw Exception('No cameras available');
+      }
       selectedCamera = cameras.firstWhere(
             (camera) => camera.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
@@ -48,40 +31,68 @@ class FaceScannerController {
 
       cameraController = CameraController(
         selectedCamera,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
       );
+
       await cameraController.initialize();
-      print('uuuuuuuuu');
+      _isInitialized = true;
       log('Camera initialized successfully');
     } catch (e) {
       log('Error initializing camera: $e');
+      _isInitialized = false;
       rethrow;
     }
   }
 
   Future<XFile?> captureImage() async {
-    if (!cameraController.value.isInitialized) {
-      log('Camera not initialized');
+    if (!_isInitialized || !cameraController.value.isInitialized) {
+      log('Camera not initialized or already disposed');
       return null;
     }
     try {
+      if (cameraController.value.isTakingPicture) {
+        log('Camera is already taking a picture');
+        return null;
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
       final image = await cameraController.takePicture();
-      print('gtgtgtgtgt');
-      log('Image captured successfully');
+      log('Image captured successfully at ${image.path}');
+      final file = File(image.path);
+      if (!file.existsSync()) {
+        throw Exception('Captured image file not found');
+      }
+      final length = await file.length();
+      if (length == 0) {
+        throw Exception('Captured image file is empty');
+      }
       return image;
     } catch (e) {
       log('Error capturing image: $e');
-      rethrow;
+      return null;
     }
   }
 
   Future<bool> compareFaces(File capturedImageFile, String storedImageBase64) async {
     try {
+      if (!await capturedImageFile.exists()) {
+        throw Exception('Captured image file not found at: ${capturedImageFile.path}');
+      }
       final storedImageBytes = base64Decode(storedImageBase64);
+      if (storedImageBytes.isEmpty) {
+        throw Exception('Stored image bytes are empty');
+      }
       final capturedImageBytes = await capturedImageFile.readAsBytes();
+      if (capturedImageBytes.isEmpty) {
+        throw Exception('Captured image bytes are empty');
+      }
+      log('Stored image size: ${storedImageBytes.length} bytes');
+      log('Captured image size: ${capturedImageBytes.length} bytes');
+
       final storedFaceImage = MatchFacesImage(storedImageBytes, ImageType.PRINTED);
       final capturedFaceImage = MatchFacesImage(capturedImageBytes, ImageType.LIVE);
+
       final request = MatchFacesRequest([storedFaceImage, capturedFaceImage]);
       final response = await faceSdk.matchFaces(request);
       final split = await faceSdk.splitComparedFaces(response.results, 0.75);
@@ -93,9 +104,9 @@ class FaceScannerController {
       }
       log('No matched faces found');
       return false;
-    } catch (e) {
-      log('Error in face comparison: $e');
-      rethrow;
+    } catch (e, stack) {
+      log('Error in face comparison: $e\n$stack');
+      return false;
     }
   }
 

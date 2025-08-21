@@ -53,6 +53,8 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
   String? selectedLeaveType;
   late String baseUrl = '';
   late Map<String, dynamic> arguments;
+  late String getToken = '';
+
 
   @override
   void initState() {
@@ -62,9 +64,18 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
     getAssignedLeaveType();
     getLeaveTypes();
     getEmployees();
+    fetchToken();
     getBaseUrl();
     prefetchData();
     _simulateLoading();
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
   }
 
   Future<void> checkPermissions() async {
@@ -209,6 +220,11 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    employeeItems.clear();
+    employeeItemsId.clear();
+    allEmployeeList = [];
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
           '$typedServerUrl/api/employee/employee-selector/?page=$page');
@@ -218,18 +234,25 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
       });
 
       if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = data['results'];
+
+        // ✅ Stop the loop if no more data
+        if (results.isEmpty) break;
+
         setState(() {
-          for (var employee in jsonDecode(response.body)['results']) {
+          for (var employee in results) {
             String fullName =
-                "${employee['employee_first_name']} ${employee['employee_last_name']}";
+            "${employee['employee_first_name'] ?? ''} ${employee['employee_last_name'] ?? ''}".trim();
             employeeItems.add(fullName);
             employeeItemsId.add(employee['id']);
           }
-          allEmployeeList = List<Map<String, dynamic>>.from(
-            jsonDecode(response.body)['results'],
-          );
+          allEmployeeList.addAll(List<Map<String, dynamic>>.from(results));
         });
-      } else {}
+      } else {
+        print('Error fetching employees: ${response.statusCode}');
+        break;
+      }
     }
   }
 
@@ -474,7 +497,7 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
                                   isAction = false;
                                 });
                                 buildTabContentAttendance(
-                                    leaveType, searchText);
+                                    leaveType, searchText, getToken);
                                 Navigator.of(context).pop(true);
                                 showAssignAnimation();
                               },
@@ -881,7 +904,7 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
               ),
             ),
             SizedBox(height: MediaQuery.of(context).size.height * 0.05),
-            buildTabContentAttendance(leaveType, searchText),
+            buildTabContentAttendance(leaveType, searchText, getToken),
           ],
         ),
       ),
@@ -941,7 +964,7 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
               ),
             ),
             SizedBox(height: MediaQuery.of(context).size.height * 0.05),
-            buildTabContentAttendance(leaveType, searchText),
+            buildTabContentAttendance(leaveType, searchText, getToken),
           ],
         ),
       ),
@@ -949,7 +972,7 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
   }
 
   Widget buildTabContentAttendance(
-      List<Map<String, dynamic>> leaveType, String searchText) {
+      List<Map<String, dynamic>> leaveType, String searchText, token) {
     List<Map<String, dynamic>> filteredLeaveType = leaveType.where((leave) {
       String employeeFullName =
       leave['employee_id']['full_name'].toString().toLowerCase();
@@ -1043,6 +1066,9 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
                                                 leaveRecords[0]
                                                 ['leave_type_id']
                                                 ['icon'],
+                                            headers: {
+                                              "Authorization": "Bearer $token",
+                                            },
                                             fit: BoxFit.cover,
                                             errorBuilder: (BuildContext
                                             context,
@@ -1116,6 +1142,9 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
                                                 child: ClipOval(
                                                   child: Image.network(
                                                     baseUrl + profile,
+                                                    headers: {
+                                                      "Authorization": "Bearer $token",
+                                                    },
                                                     fit: BoxFit.cover,
                                                     errorBuilder:
                                                         (BuildContext

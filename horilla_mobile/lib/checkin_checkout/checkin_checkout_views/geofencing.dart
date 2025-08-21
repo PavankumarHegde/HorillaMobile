@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:horilla/horilla_main/home.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -23,26 +24,31 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   final PopupController _popupController = PopupController();
   late final AnimatedMapController _mapController;
   double _currentRadius = 50.0;
-  LatLng? _tappedCoordinates;
   Position? userLocation;
-  bool _showCurrentLocationCircle = false; // For current location from FAB
-  bool _showUserLocationCircle = false; // For geofence location from API
-  List<dynamic> responseData = [];
+  Map<String, dynamic> responseData = {};
+  bool _showCurrentLocationCircle = false;
+  bool _showTappedLocationCircle = false;
+  bool _isExistingGeofence = false;
+  bool _isDisposed = false;
 
   @override
   void initState() {
     super.initState();
     _mapController = AnimatedMapController(vsync: this);
-    getGeoFenceLocation();
+    getGeoFenceLocation().then((_) {
+      if (mounted && selectedLocation != null) {
+        _mapController.animateTo(dest: selectedLocation!.coordinates, zoom: 12.0);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
     _mapController.dispose();
     super.dispose();
   }
 
-  // Fetching location name by using latitude and longitude
   Future<String> _getLocationName(double latitude, double longitude) async {
     try {
       List<Placemark> placemarks = await placemarkFromCoordinates(latitude, longitude);
@@ -59,101 +65,159 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   Future<void> createGeoFenceLocation() async {
+    if (_isDisposed) return;
+
     final prefs = await SharedPreferences.getInstance();
     var companyId = prefs.getInt("company_id");
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
     var uri = Uri.parse('$typedServerUrl/api/geofencing/setup/');
-    var response = await http.post(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        'latitude': selectedLocation?.coordinates.latitude,
-        'longitude': selectedLocation?.coordinates.longitude,
-        'radius_in_meters': selectedLocation?.radius,
-        'start': true,
-        'company_id': companyId
-      }),
-    );
-    if (response.statusCode == 201) {
-      await showCreateAnimation();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error in Saving'),
-          duration: Duration(seconds: 2),
-        ),
+
+    try {
+      var response = await http.post(
+        uri,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
+        body: jsonEncode({
+          'latitude': selectedLocation?.coordinates.latitude,
+          'longitude': selectedLocation?.coordinates.longitude,
+          'radius_in_meters': selectedLocation?.radius,
+          'start': true,
+          'company_id': companyId
+        }),
       );
-      Navigator.pop(context);
+
+      if (_isDisposed) return;
+
+      if (response.statusCode == 201) {
+        await showCreateAnimation();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error in Saving'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+          Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error in Saving'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        Navigator.pop(context);
+      }
     }
   }
 
   Future<void> updateGeoFenceLocation() async {
-    var locationId = responseData[0]['id'];
+    if (_isDisposed) return;
+    var locationId = responseData['id'];
     final prefs = await SharedPreferences.getInstance();
     var companyId = prefs.getInt("company_id");
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
     var uri = Uri.parse('$typedServerUrl/api/geofencing/setup/$locationId/');
-    var response = await http.put(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        'latitude': selectedLocation?.coordinates.latitude,
-        'longitude': selectedLocation?.coordinates.longitude,
-        'radius_in_meters': selectedLocation?.radius,
-        'start': true,
-        'company_id': companyId
-      }),
-    );
-    if (response.statusCode == 200) {
-      await showCreateAnimation();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error in Saving'),
-          duration: Duration(seconds: 2),
-        ),
+
+    try {
+      var response = await http.put(
+        uri,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
+        body: jsonEncode({
+          'latitude': selectedLocation?.coordinates.latitude,
+          'longitude': selectedLocation?.coordinates.longitude,
+          'radius_in_meters': selectedLocation?.radius,
+          'start': true,
+          'company_id': companyId
+        }),
       );
-      Navigator.pop(context);
+
+      if (_isDisposed) return;
+      if (response.statusCode == 200) {
+        await showCreateAnimation();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error in Saving'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+          Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error in Saving'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        Navigator.pop(context);
+      }
     }
   }
 
   Future<void> deleteGeoFenceLocation() async {
+    if (_isDisposed) return;
+
     final prefs = await SharedPreferences.getInstance();
-    var locationId = responseData[0]['id'];
+    var locationId = responseData['id'];
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
     var uri = Uri.parse('$typedServerUrl/api/geofencing/setup/$locationId/');
-    var response = await http.delete(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-    );
-    if (response.statusCode == 204) {
-      await showDeleteAnimation();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error in delete'),
-          duration: Duration(seconds: 2),
-        ),
+
+    try {
+      var response = await http.delete(
+        uri,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
       );
-      Navigator.pop(context);
+
+      if (_isDisposed) return;
+
+      if (response.statusCode == 204) {
+        await showDeleteAnimation();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Error in delete'),
+                duration: Duration(seconds: 2),
+              )
+          );
+          Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error in delete'),
+              duration: Duration(seconds: 2),
+            )
+        );
+        Navigator.pop(context);
+      }
     }
   }
 
-
-  // Fetching geofence location by using latitude and longitude
   Future<void> getGeoFenceLocation() async {
+    if (_isDisposed) return;
+
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -165,12 +229,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         "Authorization": "Bearer $token",
       });
 
+      if (_isDisposed) return;
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data is List && data.isNotEmpty) {
-          final lat = data[0]['latitude'];
-          final lng = data[0]['longitude'];
-          final rad = data[0]['radius_in_meters'];
+        if (data.isNotEmpty) {
+          final lat = data['latitude'];
+          final lng = data['longitude'];
+          final rad = data['radius_in_meters'];
 
           if (lat != null && lng != null && rad != null) {
             final locationName = await _getLocationName(lat, lng);
@@ -178,14 +244,18 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               LatLng(lat, lng),
               locationName,
               (rad).toDouble(),
+              isExisting: true,
             );
-
-            setState(() {
-              responseData = data;
-              _showUserLocationCircle = true;
-              locations.add(location);
-              _mapController.animateTo(dest: location.coordinates, zoom: 12.0);
-            });
+            if (mounted) {
+              setState(() {
+                responseData = data;
+                locations.clear();
+                locations.add(location);
+                selectedLocation = location;
+                _currentRadius = rad.toDouble();
+                _isExistingGeofence = true;
+              });
+            }
           }
         }
       } else {
@@ -196,8 +266,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
-
   Future<void> showCreateAnimation() async {
+    if (_isDisposed) return;
+
     String jsonContent = '''
 {
   "imagePath": "Assets/gif22.gif"
@@ -205,6 +276,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 ''';
     Map<String, dynamic> jsonData = json.decode(jsonContent);
     String imagePath = jsonData['imagePath'];
+
+    if (!mounted) return;
 
     showDialog(
       context: context,
@@ -236,17 +309,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         );
       },
     );
+
     Future.delayed(const Duration(seconds: 3), () {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => LoginPage(),
-        ),
-      );
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => HomePage(),
+          ),
+        );
+      }
     });
   }
 
   Future<void> showDeleteAnimation() async {
+    if (_isDisposed) return;
+
     String jsonContent = '''
 {
   "imagePath": "Assets/gif22.gif"
@@ -254,6 +332,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 ''';
     Map<String, dynamic> jsonData = json.decode(jsonContent);
     String imagePath = jsonData['imagePath'];
+
+    if (!mounted) return;
 
     showDialog(
       context: context,
@@ -285,16 +365,19 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         );
       },
     );
+
     Future.delayed(const Duration(seconds: 3), () {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => LoginPage(),
-        ),
-      );
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => HomePage(),
+          ),
+        );
+      }
     });
   }
-  // Fetching current location by using geolocator
+
   Future<Position?> fetchCurrentLocation() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -332,10 +415,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             child: FlutterMap(
               mapController: _mapController.mapController,
               options: MapOptions(
-                center: userLocation != null
+                center: selectedLocation != null
+                    ? selectedLocation!.coordinates
+                    : userLocation != null
                     ? LatLng(userLocation!.latitude, userLocation!.longitude)
-                    : LatLng(40.0, 0.0),
-                zoom: userLocation != null ? 12.0 : 2.0,
+                    : const LatLng(40.0, 0.0),
+                zoom: (selectedLocation != null || userLocation != null) ? 12.0 : 2.0,
                 minZoom: 2.0,
                 maxZoom: 18.0,
                 interactiveFlags: InteractiveFlag.all,
@@ -344,17 +429,25 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                     latLng.latitude,
                     latLng.longitude,
                   );
-                  setState(() {
-                    _tappedCoordinates = latLng;
-                    _showCurrentLocationCircle = false; // Hide only current location circle
-                    final newLocation = LocationWithRadius(
-                      latLng,
-                      locationName,
-                      _currentRadius,
+                  if (mounted) {
+                    setState(() {
+                      locations.clear();
+                      final newLocation = LocationWithRadius(
+                        latLng,
+                        locationName,
+                        _currentRadius,
+                      );
+                      locations.add(newLocation);
+                      selectedLocation = newLocation;
+                      _showCurrentLocationCircle = false;
+                      _showTappedLocationCircle = true;
+                      _isExistingGeofence = false;
+                    });
+                    _mapController.animateTo(
+                      dest: latLng,
+                      zoom: 12.0,
                     );
-                    locations.add(newLocation);
-                    selectedLocation = newLocation;
-                  });
+                  }
                 },
               ),
               children: [
@@ -364,7 +457,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 ),
                 CircleLayer(
                   circles: [
-                    if (selectedLocation != null)
+                    if (selectedLocation != null && _showTappedLocationCircle)
                       CircleMarker(
                         point: selectedLocation!.coordinates,
                         color: Colors.blue.withOpacity(0.3),
@@ -378,15 +471,15 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                         color: Colors.green.withOpacity(0.3),
                         borderColor: Colors.green,
                         borderStrokeWidth: 2.0,
-                        radius: 50.0,
+                        radius: _currentRadius,
                       ),
-                    if (_showUserLocationCircle && responseData.isNotEmpty)
+                    if (responseData.isNotEmpty && !_showCurrentLocationCircle && !_showTappedLocationCircle)
                       CircleMarker(
-                        point: LatLng(responseData[0]['latitude'], responseData[0]['longitude']),
+                        point: LatLng(responseData['latitude'], responseData['longitude']),
                         color: Colors.green.withOpacity(0.3),
                         borderColor: Colors.green,
                         borderStrokeWidth: 2.0,
-                        radius: responseData[0]['radius_in_meters'].toDouble(),
+                        radius: _currentRadius,
                       ),
                   ],
                 ),
@@ -400,20 +493,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                       height: 40.0,
                       child: GestureDetector(
                         onTap: () {
-                          setState(() {
-                            selectedLocation = loc;
-                            _tappedCoordinates = null;
-                          });
-                          _mapController.animateTo(
-                            dest: loc.coordinates,
-                            zoom: 12.0,
-                          );
+                          if (mounted) {
+                            setState(() {
+                              selectedLocation = loc;
+                              if (loc.isExisting) {
+                                _isExistingGeofence = true;
+                              }
+                            });
+                            _mapController.animateTo(
+                              dest: loc.coordinates,
+                              zoom: 12.0,
+                            );
+                          }
                         },
                         child: Icon(
                           Icons.location_on,
-                          color: selectedLocation == loc
-                              ? Colors.blue
-                              : Colors.red,
+                          color: Colors.red,
                           size: 40.0,
                         ),
                       ),
@@ -474,10 +569,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                       ),
                       IconButton(
                         onPressed: () {
-                          setState(() {
-                            locations.remove(selectedLocation);
-                            selectedLocation = null;
-                          });
+                          if (mounted) {
+                            setState(() {
+                              locations.remove(selectedLocation);
+                              selectedLocation = null;
+                              _showTappedLocationCircle = false;
+                              _isExistingGeofence = false;
+                            });
+                          }
                         },
                         icon: const Icon(Icons.close, color: Colors.red),
                       ),
@@ -489,45 +588,54 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                       const Text('Geofence Radius: '),
                       Expanded(
                         child: Slider(
-                          value: selectedLocation!.radius,
-                          min: 1,
-                          max: 100,
+                          value: _currentRadius,
+                          min: 1,  // Minimum value is 1 (natural number)
+                          max: 10000,
                           divisions: 99,
-                          label:
-                          '${(selectedLocation!.radius).toStringAsFixed(2)} m',
+                          label: '${_currentRadius.round()} m',  // Round to nearest integer
                           onChanged: (value) {
-                            setState(() {
-                              final index = locations.indexOf(selectedLocation!);
-                              locations[index] = LocationWithRadius(
-                                selectedLocation!.coordinates,
-                                selectedLocation!.name,
-                                value,
-                              );
-                              selectedLocation = locations[index];
-                            });
+                            if (mounted) {
+                              setState(() {
+                                _currentRadius = value.roundToDouble();  // Round to nearest integer
+                                if (selectedLocation != null) {
+                                  final index = locations.indexOf(selectedLocation!);
+                                  locations[index] = LocationWithRadius(
+                                    selectedLocation!.coordinates,
+                                    selectedLocation!.name,
+                                    _currentRadius,  // Now a natural number
+                                    isExisting: selectedLocation!.isExisting,
+                                  );
+                                  selectedLocation = locations[index];
+                                }
+                              });
+                            }
                           },
                         ),
                       ),
-                      Text(
-                          '${(selectedLocation!.radius).toStringAsFixed(2)} m'),
+                      Text('${_currentRadius.toStringAsFixed(2)} m'),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      ElevatedButton(
-                        onPressed: () async {
-                          await showGeofencingDelete(context);
-                          setState(() {
-                            locations.remove(selectedLocation);
-                            selectedLocation = null;
-                          });
-                        },
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red),
-                        child: const Text('Delete'),
-                      ),
+                      if (_isExistingGeofence)
+                        ElevatedButton(
+                          onPressed: () async {
+                            await showGeofencingDelete(context);
+                            if (mounted) {
+                              setState(() {
+                                locations.remove(selectedLocation);
+                                selectedLocation = null;
+                                _showTappedLocationCircle = false;
+                                _isExistingGeofence = false;
+                              });
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red),
+                          child: const Text('Delete'),
+                        ),
                       ElevatedButton(
                         onPressed: () async {
                           await showGeofencingSetting(context);
@@ -544,14 +652,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
           final newLocation = await fetchCurrentLocation();
-          if (newLocation != null) {
+          if (newLocation != null && mounted) {
             String locationName = await _getLocationName(
               newLocation.latitude,
               newLocation.longitude,
             );
             setState(() {
               userLocation = newLocation;
-              _showCurrentLocationCircle = true; // Show current location circle
+              locations.clear();
               final newLoc = LocationWithRadius(
                 LatLng(newLocation.latitude, newLocation.longitude),
                 locationName,
@@ -559,11 +667,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               );
               locations.add(newLoc);
               selectedLocation = newLoc;
-              _mapController.animateTo(
-                dest: LatLng(newLocation.latitude, newLocation.longitude),
-                zoom: 12.0,
-              );
+              _showCurrentLocationCircle = true;
+              _showTappedLocationCircle = false;
+              _isExistingGeofence = false;
             });
+            _mapController.animateTo(
+              dest: LatLng(newLocation.latitude, newLocation.longitude),
+              zoom: 12.0,
+            );
           }
         },
         child: const Icon(Icons.my_location),
@@ -572,6 +683,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   Future<void> showGeofencingSetting(BuildContext context) async {
+    if (!mounted) return;
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -587,6 +700,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             ),
             TextButton(
               onPressed: () async {
+                Navigator.of(context).pop();
                 final prefs = await SharedPreferences.getInstance();
                 var geo_fencing = prefs.getBool("geo_fencing");
                 if (geo_fencing == true) {
@@ -605,6 +719,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   Future<void> showGeofencingDelete(BuildContext context) async {
+    if (!mounted) return;
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -620,6 +736,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             ),
             TextButton(
               onPressed: () async {
+                Navigator.of(context).pop();
                 await deleteGeoFenceLocation();
               },
               child: const Text("Confirm"),
@@ -635,6 +752,8 @@ class LocationWithRadius {
   final LatLng coordinates;
   final String name;
   double radius; // in meters
+  bool isExisting;
 
-  LocationWithRadius(this.coordinates, this.name, this.radius);
+  LocationWithRadius(this.coordinates, this.name, double radius, {this.isExisting = false})
+      : radius = radius.roundToDouble().clamp(1, double.infinity);  // Ensure at least 1
 }

@@ -106,6 +106,8 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
   Map<String, String> employeeIdMap = {};
   Map<String, dynamic> employeeDetails = {};
   bool isCreateButtonVisible = true;
+  late String getToken = '';
+
 
 
   @override
@@ -121,10 +123,19 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
       getEmployeeDetails();
       getWorkType();
       getBaseUrl();
+      fetchToken();
       _simulateLoading();
       getRequestingShift();
       _simulateLoading();
       createVisibility();
+    });
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
     });
   }
 
@@ -183,9 +194,6 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
     });
-    print('dddddd');
-    print(response.statusCode);
-    print(response.body);
     if (response.statusCode == 200) {
       approveRejectCheck = true;
     }
@@ -254,35 +262,6 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
     }
   }
 
-  // Future<void> getEmployees() async {
-  //   final prefs = await SharedPreferences.getInstance();
-  //   var token = prefs.getString("token");
-  //   var typedServerUrl = prefs.getString("typed_url");
-  //   for (var page = 1;; page++) {
-  //     var uri = Uri.parse(
-  //         '$typedServerUrl/api/employee/employee-selector?page=$page');
-  //     var response = await http.get(uri, headers: {
-  //       "Content-Type": "application/json",
-  //       "Authorization": "Bearer $token",
-  //     });
-  //     if (response.statusCode == 200) {
-  //       setState(() {
-  //         for (var employee in jsonDecode(response.body)['results']) {
-  //           final firstName = employee['employee_first_name'] ?? '';
-  //           final lastName = employee['employee_last_name'] ?? '';
-  //           final fullName = (firstName.isEmpty ? '' : firstName) +
-  //               (lastName.isEmpty ? '' : ' $lastName');
-  //           String employeeId = "${employee['id']}";
-  //           employeeItems.add(fullName);
-  //           employeeIdMap[fullName] = employeeId;
-  //         }
-  //         allEmployeeList = List<Map<String, dynamic>>.from(
-  //           jsonDecode(response.body)['results'],
-  //         );
-  //       });
-  //     }
-  //   }
-  // }
 
   Future<void> getEmployees() async {
     final prefs = await SharedPreferences.getInstance();
@@ -295,10 +274,6 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
     });
-
-    print('Request URI: $uri');
-    print('Response Status Code: ${response.statusCode}');
-    print('Response Body: ${response.body}');
 
     if (response.statusCode == 200) {
       setState(() {
@@ -1698,7 +1673,7 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
     );
   }
 
-  Widget buildListItem(Map<String, dynamic> record, baseUrl) {
+  Widget buildListItem(Map<String, dynamic> record, baseUrl, token) {
     final image = employeeDetails['employee_profile'] ?? '';
     return GestureDetector(
       onTap: () {
@@ -1752,6 +1727,9 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
                                               baseUrl +
                                                   employeeDetails[
                                                   'employee_profile'],
+                                              headers: {
+                                                "Authorization": "Bearer $token",
+                                              },
                                               fit: BoxFit.cover,
                                               errorBuilder: (BuildContext context,
                                                   Object exception,
@@ -2374,6 +2352,9 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
                                   child: Image.network(
                                     baseUrl +
                                         employeeDetails['employee_profile'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -3332,7 +3313,7 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
                   final record = searchText.isEmpty
                       ? requests[index]
                       : filteredRecords[index];
-                  return buildListItem(record, baseUrl);
+                  return buildListItem(record, baseUrl,getToken);
                 },
               ),
             ),
