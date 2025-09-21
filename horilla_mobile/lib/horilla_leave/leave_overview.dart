@@ -37,6 +37,8 @@ class _LeaveOverview extends State<LeaveOverview>
   bool permissionLeaveOverviewCheck = false;
   bool permissionMyLeaveRequestCheck = false;
   bool permissionLeaveAllocationCheck = false;
+  late String getToken = '';
+
 
   @override
   void dispose() {
@@ -49,7 +51,16 @@ class _LeaveOverview extends State<LeaveOverview>
     super.initState();
     getAllLeaveRequest();
     getBaseUrl();
+    fetchToken();
     prefetchData();
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
   }
 
   Future<void> checkPermissions() async {
@@ -509,6 +520,7 @@ class _LeaveOverview extends State<LeaveOverview>
                                   fullName,
                                   image ?? "",
                                   baseUrl,
+                                  getToken,
                                   badgeId ?? "",
                                   requestId,
                                 );
@@ -934,7 +946,7 @@ Widget _buildShimmerList(BuildContext context) {
 }
 
 Widget buildLeaveTodayTile(BuildContext context, String fullName, String image,
-    String baseUrl, String badgeId, int requestId) {
+    String baseUrl,token, String badgeId, int requestId) {
   return GestureDetector(
     child: Container(
       margin: const EdgeInsets.symmetric(vertical: 1.0),
@@ -955,6 +967,9 @@ Widget buildLeaveTodayTile(BuildContext context, String fullName, String image,
                     child: ClipOval(
                       child: Image.network(
                         baseUrl + image,
+                        headers: {
+                          "Authorization": "Bearer $token",
+                        },
                         fit: BoxFit.cover,
                         errorBuilder: (BuildContext context, Object exception,
                             StackTrace? stackTrace) {

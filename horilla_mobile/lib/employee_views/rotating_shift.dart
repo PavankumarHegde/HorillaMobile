@@ -106,6 +106,8 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
   bool _validateBasedOn = false;
   bool _validateRotateDay = false;
   int? selectedEmployerId;
+  late String getToken = '';
+
 
   @override
   void initState() {
@@ -118,9 +120,18 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
       getRotatingShiftRequest();
       getEmployees();
       getBaseUrl();
+      fetchToken();
       _simulateLoading();
       getEmployeeDetails();
       getRotatingShift();
+    });
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
     });
   }
 
@@ -367,6 +378,9 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    allEmployeeList.clear();
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
           '$typedServerUrl/api/employee/employee-selector?page=$page');
@@ -374,9 +388,17 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
+        var responseBody = jsonDecode(response.body);
+        var results = responseBody['results'];
+
+        if (results == null || results.isEmpty) {
+          break;
+        }
+
         setState(() {
-          for (var employee in jsonDecode(response.body)['results']) {
+          for (var employee in results) {
             final firstName = employee['employee_first_name'] ?? '';
             final lastName = employee['employee_last_name'] ?? '';
             final fullName = (firstName.isEmpty ? '' : firstName) +
@@ -385,10 +407,11 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
             employeeItems.add(fullName);
             employeeIdMap[fullName] = employeeId;
           }
-          allEmployeeList = List<Map<String, dynamic>>.from(
-            jsonDecode(response.body)['results'],
-          );
+          allEmployeeList.addAll(List<Map<String, dynamic>>.from(results));
         });
+      } else {
+        print('Failed to fetch employees: ${response.statusCode}');
+        break;
       }
     }
   }
@@ -1550,7 +1573,7 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
     );
   }
 
-  Widget buildListItem(Map<String, dynamic> record, baseUrl) {
+  Widget buildListItem(Map<String, dynamic> record, baseUrl, token) {
     final image = employeeDetails['employee_profile'] ?? '';
 
     return GestureDetector(
@@ -1602,6 +1625,9 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
                                       child: Image.network(
                                         baseUrl +
                                             employeeDetails['employee_profile'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,
@@ -1810,6 +1836,9 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
                                   child: Image.network(
                                     baseUrl +
                                         employeeDetails['employee_profile'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -2095,49 +2124,6 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
         backgroundColor: Colors.white,
         title: const Text('Rotating Shift',
             style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-        // actions: [
-        //   Padding(
-        //     padding: const EdgeInsets.all(12.0),
-        //     child: Row(
-        //       mainAxisAlignment: MainAxisAlignment.end,
-        //       children: [
-        //         // if (permissionCheck)
-        //         Container(
-        //           alignment: Alignment.centerRight,
-        //           child: ElevatedButton(
-        //             onPressed: () {
-        //               setState(() {
-        //                 _errorMessage = null;
-        //                 _typeAheadCreateRotatingShiftController.clear();
-        //                 createRotateStartDateController.clear();
-        //                 selectedCreateBasedOnValue = " ";
-        //                 _rotateCreateDayController.text = "0";
-        //                 _validateRotateShift = false;
-        //                 _validateRequestedDate = false;
-        //                 _validateBasedOn = false;
-        //                 _validateRotateDay = false;
-        //                 isAction = false;
-        //               });
-        //               _showCreateRotatingShift(context,
-        //                   selectedEmployeeFullName, selectedEmployerId);
-        //             },
-        //             style: ElevatedButton.styleFrom(
-        //               minimumSize: const Size(75, 50),
-        //               backgroundColor: Colors.white,
-        //               shape: RoundedRectangleBorder(
-        //                 borderRadius: BorderRadius.circular(4.0),
-        //                 side: const BorderSide(color: Colors.red),
-        //               ),
-        //             ),
-        //             child: const Text('CREATE',
-        //                 style: TextStyle(color: Colors.red)),
-        //           ),
-        //         ),
-        //         // ),
-        //       ],
-        //     ),
-        //   ),
-        // ],
       ),
       body: _isShimmerVisible
           ? _buildLoadingWidget()
@@ -2314,7 +2300,7 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
                   final record = searchText.isEmpty
                       ? requests[index]
                       : filteredRecords[index];
-                  return buildListItem(record, baseUrl);
+                  return buildListItem(record, baseUrl, getToken);
                 },
               ),
             ),

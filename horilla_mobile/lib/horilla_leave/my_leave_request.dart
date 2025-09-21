@@ -78,6 +78,10 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
   int? difference;
   int? available;
   int maxCount = 5;
+  bool isFetching = false;
+  bool hasMore = true;
+  late String getToken = '';
+
 
   String _getBreakdown(String breakdownValue) {
     final breakdownMap = {
@@ -126,9 +130,12 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
   TextEditingController endDateSelect = TextEditingController();
   final TextEditingController _fileNameController = TextEditingController();
 
+
   @override
   void initState() {
     super.initState();
+    currentPage = 1;
+    getMyAllLeaveRequestFirstPage();
     _scrollController.addListener(_scrollListener);
     startDateSelect.text = "Select Start Date";
     endDateSelect.text = "Select End Date";
@@ -146,6 +153,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     getUserLeaveRequest();
     getCurrentEmployeeDetails();
     getBaseUrl();
+    fetchToken();
     checkUserType();
     prefetchData();
   }
@@ -156,6 +164,15 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     await permissionLeaveRequestChecks();
     await permissionLeaveAssignChecks();
   }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
+  }
+
 
   Future<void> _simulateLoading() async {
     await Future.delayed(const Duration(seconds: 5));
@@ -297,12 +314,76 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
   }
 
   void _scrollListener() {
-    if (_scrollController.offset >=
-        _scrollController.position.maxScrollExtent &&
-        !_scrollController.position.outOfRange) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200 &&
+        !isFetching &&
+        hasMore) {
       currentPage++;
-      getMyAllLeaveRequest();
+      getMyAllLeaveRequestNextPage();
     }
+  }
+
+  Future<void> getMyAllLeaveRequestNextPage() async {
+    await _fetchLeavePage(currentPage, reset: false);
+  }
+
+  Future<void> _fetchLeavePage(int page, {required bool reset}) async {
+    if (isFetching) return;
+    isFetching = true;
+
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    var typedServerUrl = prefs.getString("typed_url");
+
+    final uri = Uri.parse(
+        '$typedServerUrl/api/leave/user-request?employee_id=$employeeId&page=$page');
+
+    final response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    });
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      List<dynamic> newResults = List.from(data['results'] ?? []);
+      int totalCount = data['count'] ?? 0;
+
+      setState(() {
+        if (reset) {
+          myAllRequests = (jsonDecode(response.body)['results'] as List)
+              .map((e) => e as Map<String, dynamic>)
+              .toList();
+        } else {
+          myAllRequests.addAll(
+            (jsonDecode(response.body)['results'] as List)
+                .map((e) => e as Map<String, dynamic>)
+                .toList(),
+          );
+        }
+        allMyRequestsCount = totalCount;
+
+        if (myAllRequests.length >= totalCount) {
+          hasMore = false;
+        }
+      });
+    } else {
+      hasMore = false;
+    }
+
+    isFetching = false;
+  }
+
+  Future<void> getMyAllLeaveRequestFirstPage() async {
+    setState(() {
+      isLoading = true;
+      myAllRequests.clear();
+      hasMore = true;
+      currentPage = 1;
+    });
+    await _fetchLeavePage(currentPage, reset: true);
+    setState(() {
+      isLoading = false;
+    });
   }
 
   Future<void> getCurrentEmployeeDetails() async {
@@ -1750,6 +1831,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                           MaterialPageRoute(
                                             builder: (context) => ImageViewer(
                                               imagePath: baseUrl + pdfPath,
+                                              token: getToken,
                                             ),
                                           ),
                                         );
@@ -2150,8 +2232,6 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
 
   Future<void> updateRequest(Map<String, dynamic> updatedDetails, checkfile,
       String fileName, String filePath) async {
-    print('updatedDetailsssssssss');
-    print(updatedDetails);
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -2465,7 +2545,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                       itemCount: myRequests.length,
                       itemBuilder: (context, index) {
                         final record = myRequests[index];
-                        return buildLeaveTile(record, baseUrl);
+                        return buildLeaveTile(record, baseUrl, getToken);
                       },
                       padding: const EdgeInsets.only(top: 10.0),
                       gridDelegate:
@@ -3045,6 +3125,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
       String profile,
       stateInfo,
       String recordId,
+      token
       ) {
     return GestureDetector(
       onTap: () async {
@@ -3101,6 +3182,9 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                           baseUrl +
                                               record['leave_type_id']
                                               ['icon'],
+                                          headers: {
+                                            "Authorization": "Bearer $token",
+                                          },
                                           fit: BoxFit.cover,
                                           errorBuilder: (BuildContext
                                           context,
@@ -3321,7 +3405,8 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => ImageViewer(
-                                            imagePath: baseUrl + pdfPath),
+                                            imagePath: baseUrl + pdfPath,
+                                          token: getToken,),
                                       ),
                                     );
                                   } else {
@@ -3398,6 +3483,9 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                 child: ClipOval(
                                   child: Image.network(
                                     baseUrl + profile,
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -3769,7 +3857,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     );
   }
 
-  Widget buildLeaveTile(Map<String, dynamic> record, baseUrl) {
+  Widget buildLeaveTile(Map<String, dynamic> record, baseUrl, token) {
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -3849,6 +3937,9 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                                 baseUrl +
                                                     record['leave_type_id']
                                                     ['icon'],
+                                                headers: {
+                                                  "Authorization": "Bearer $token",
+                                                },
                                                 fit: BoxFit.cover,
                                                 errorBuilder: (BuildContext
                                                 context,
@@ -4064,6 +4155,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                 profile,
                 stateInfo,
                 recordId,
+                getToken
               );
             },
           ),
@@ -4097,8 +4189,10 @@ StateInfo _getStateInfo(String state) {
 
 class ImageViewer extends StatelessWidget {
   final String imagePath;
+  final String token;
 
-  const ImageViewer({super.key, required this.imagePath});
+
+  const ImageViewer({super.key, required this.imagePath, required this.token});
 
   @override
   Widget build(BuildContext context) {
@@ -4115,6 +4209,9 @@ class ImageViewer extends StatelessWidget {
         child: isNetworkImage
             ? Image.network(
           imagePath,
+          headers: {
+            "Authorization": "Bearer $token",
+          },
           errorBuilder: (context, error, stackTrace) {
             return const Text(
               'Error loading image',

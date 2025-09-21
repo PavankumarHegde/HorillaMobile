@@ -3,17 +3,17 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:horilla/checkin_checkout/checkin_checkout_views/setup_imageface.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../../res/consts/app_colors.dart'; // Adjust path as needed
-import '../controllers/face_detection_controller.dart'; // Adjust path as needed
+import 'package:geolocator/geolocator.dart';
+import 'checkin_checkout_form.dart';
+import '../controllers/face_detection_controller.dart';
 
 class FaceScanner extends StatefulWidget {
-  final Map<String, dynamic> userDetails;
-  final String? attendanceState; // CHECKED_IN, CHECKED_OUT, or NOT_CHECKED_IN
+  final Map userDetails;
+  final String? attendanceState;
   final Position? userLocation;
 
   const FaceScanner({
@@ -32,35 +32,40 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
   bool _isCameraInitialized = false;
   bool _isComparing = false;
   String? _employeeImageBase64;
+  bool _isDetectionPaused = false;
+  bool _isFetchingImage = false;
+
   late AnimationController _animationController;
-  late Animation<double> _rotationAnimation;
-  late Animation<double> _scaleAnimation;
-  bool _isLoadingEmployeeImage = true;
-  bool _isDetectionPaused = false; // Flag to control face detection loop
+  late Animation _rotationAnimation;
+  late Animation _scaleAnimation;
 
   @override
   void initState() {
     super.initState();
     _controller = FaceScannerController();
     _setupAnimations();
-    _initializeController();
+    _initializeApp();
   }
 
-  Future<void> _initializeController() async {
-    final prefs = await SharedPreferences.getInstance();
-    var face_detection_image = prefs.getString("face_detection_image");
+  void _setupAnimations() {
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _rotationAnimation = Tween(begin: 0.0, end: 2 * math.pi).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.linear),
+    );
+    _scaleAnimation = Tween(begin: 1.0, end: 0.8).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
+    _animationController.repeat();
+  }
+
+  Future<void> _initializeApp() async {
     try {
-      await _controller.initializeCamera();
-      if (!mounted) return;
-      setState(() {
-        _isCameraInitialized = true;
-      });
       await _fetchBiometricImage();
-      setState(() {
-        _isLoadingEmployeeImage = false;
-      });
-      if (face_detection_image != 'null') {
-        _startRealTimeFaceDetection();
+      if (_employeeImageBase64 != null && mounted) {
+        await _initializeCamera();
       }
     } catch (e) {
       if (mounted) {
@@ -71,130 +76,172 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     }
   }
 
-  void _setupAnimations() {
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
-    _rotationAnimation = Tween<double>(begin: 0, end: 2 * math.pi).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.linear),
-    );
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.8).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
-    );
-    _animationController.repeat();
-  }
+  Future<void> _initializeCamera() async {
+    try {
+      await _controller.initializeCamera();
+      if (!mounted) return;
 
-  // Fetching biometric image and convert into base64
-  Future<void> _fetchBiometricImage() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var face_detection_image = prefs.getString("face_detection_image");
-    if (face_detection_image != 'null') {
-      String? imagePathOrBase64 = face_detection_image;
-      if (imagePathOrBase64 != null && imagePathOrBase64.isNotEmpty) {
-        if (imagePathOrBase64.startsWith('data:image') || imagePathOrBase64.contains(';base64,')) {
-          setState(() {
-            _employeeImageBase64 = imagePathOrBase64.split(',').last;
-          });
-        } else if (imagePathOrBase64.startsWith('/')) {
-          var imageUri = Uri.parse('$typedServerUrl$imagePathOrBase64');
-          var imageResponse = await http.get(imageUri, headers: {
-            "Authorization": "Bearer $token",
-          });
-          if (imageResponse.statusCode == 200) {
-            setState(() {
-              _employeeImageBase64 = base64Encode(imageResponse.bodyBytes);
-            });
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to fetch image from path.')),
-            );
-          }
-        } else {
-          setState(() {
-            _employeeImageBase64 = imagePathOrBase64;
-          });
-        }
-      } else {
-        showImageAlertDialog(context);
+      setState(() => _isCameraInitialized = true);
+      _startRealTimeFaceDetection();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Camera initialization failed: $e')),
+        );
       }
     }
-    else {
-      showImageAlertDialog(context);
+  }
+
+  Future<void> _fetchBiometricImage() async {
+    if (_isFetchingImage) return;
+    setState(() => _isFetchingImage = true);
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    final faceDetectionImage = prefs.getString("face_detection_image");
+    final imagePath = prefs.getString("imagePath");
+
+    if (token == null || typedServerUrl == null || faceDetectionImage == '' || imagePath == null) {
+      if (mounted) showImageAlertDialog(context);
+      return;
+    }
+
+    try {
+      // --- Build image URL ---
+      String? imageUrl;
+      final cleanedServerUrl = typedServerUrl.endsWith('/')
+          ? typedServerUrl.substring(0, typedServerUrl.length - 1)
+          : typedServerUrl;
+
+      if (faceDetectionImage != null) {
+        final cleanedPath = faceDetectionImage.startsWith('/')
+            ? faceDetectionImage.substring(1)
+            : faceDetectionImage;
+        imageUrl = '$cleanedServerUrl/$cleanedPath';
+      } else if (imagePath != null) {
+        final cleanedPath = imagePath.startsWith('/')
+            ? imagePath.substring(1)
+            : imagePath;
+        imageUrl = '$cleanedServerUrl/media/$cleanedPath';
+      }
+
+      if (imageUrl == null) {
+        if (mounted) showImageAlertDialog(context);
+        return;
+      }
+
+      debugPrint("🔎 Fetching biometric image: $imageUrl");
+
+      // --- Correct usage of HttpClient + IOClient ---
+      final httpClient = HttpClient();
+      httpClient.badCertificateCallback =
+          (X509Certificate cert, String host, int port) => true;
+      httpClient.autoUncompress = false;
+
+      final ioClient = IOClient(httpClient);
+
+      final response = await ioClient.get(
+        Uri.parse(imageUrl),
+        headers: {
+          "Authorization": "Bearer $token",
+          "Accept": "image/*",
+          "Accept-Encoding": "identity",
+          "User-Agent": "FlutterApp/1.0",
+          "Connection": "keep-alive",
+        },
+      );
+
+      print('cfcfccf');
+
+      debugPrint("📥 Status: ${response.statusCode}");
+      debugPrint("📥 Headers: ${response.headers}");
+
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        setState(() {
+          _employeeImageBase64 = base64Encode(response.bodyBytes);
+        });
+        debugPrint("✅ Image downloaded: ${response.bodyBytes.length} bytes");
+      } else {
+        debugPrint("❌ Invalid response or empty image data");
+        if (mounted) showImageAlertDialog(context);
+      }
+
+      ioClient.close();
+    } catch (e) {
+      debugPrint("⚠️ Error fetching biometric image: $e");
+      if (mounted) showImageAlertDialog(context);
+    } finally {
+      if (mounted) setState(() => _isFetchingImage = false);
     }
   }
 
   void showImageAlertDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text("Employee Image Not Set"),
-          content: Text("Setup a New FaceImage?"),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-                Navigator.of(context).pop(); // Go back
-              },
-              child: Text("No"),
-            ),
-            TextButton(
-              onPressed: () async {
-                final cameras = await availableCameras();
-                Navigator.of(context).pop(); // Close the dialog
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (context) => CameraSetupPage(cameras: cameras,)),
+      builder: (ctx) => AlertDialog(
+        title: const Text("Employee Image Not Set"),
+        content: const Text("Setup a New FaceImage?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("No"),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              final cameras = await availableCameras();
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => CameraSetupPage(cameras: cameras)),
                 );
-              },
-              child: Text("Yes"),
-            ),
-          ],
-        );
-      },
+              }
+            },
+            child: const Text("Yes"),
+          ),
+        ],
+      ),
     );
   }
 
-  // Detecting face on real time continuosly and compare face matching
-  void _startRealTimeFaceDetection() async {
-    while (_isCameraInitialized && !_isDetectionPaused) {
-      final image = await _controller.captureImage();
-      if (image != null && mounted && _employeeImageBase64 != null) {
-        setState(() {
-          _isComparing = true;
-        });
+  Future<void> _startRealTimeFaceDetection() async {
+    while (_isCameraInitialized && !_isDetectionPaused && mounted) {
+      try {
+        await Future.delayed(const Duration(milliseconds: 500)); // Increased delay
 
-        try {
-          bool isMatched = await _controller.compareFaces(
-            File(image.path),
-            _employeeImageBase64!,
-          );
+        if (!mounted || !_controller.cameraController.value.isInitialized) break;
 
-          if (isMatched) {
-            _handleComparisonResult(true);
-            break; // Exit the loop if a match is found
-          } else {
-            setState(() {
-              _isDetectionPaused = true; // Pause detection
-            });
-            await _showIncorrectFaceAlert();
-            setState(() {
-              _isDetectionPaused = false; // Resume detection after alert
-            });
-          }
-        } catch (e) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Face comparison failed: $e')),
-          );
-        } finally {
-          setState(() {
-            _isComparing = false;
-          });
+        setState(() => _isComparing = true);
+        final image = await _controller.captureImage();
+
+        if (image == null || _employeeImageBase64 == null) {
+          debugPrint('Image capture failed or no employee image');
+          continue;
         }
+
+        debugPrint('Starting face comparison...');
+        final isMatched = await _controller.compareFaces(File(image.path), _employeeImageBase64!);
+        debugPrint('Face comparison result: $isMatched');
+
+        if (isMatched) {
+          await _handleComparisonResult(true);
+          break;
+        } else {
+          setState(() => _isDetectionPaused = true);
+          await _showIncorrectFaceAlert();
+          setState(() => _isDetectionPaused = false);
+        }
+      } catch (e) {
+        debugPrint('Face detection error: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Face detection error. Please try again.')),
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _isComparing = false);
       }
-      await Future.delayed(const Duration(milliseconds: 500)); // Delay between captures
     }
   }
 
@@ -202,133 +249,83 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     return showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text("Incorrect Face"),
-          content: const Text("The detected face does not match. Please try again."),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: const Text("OK"),
-            ),
-          ],
-        );
-      },
+      builder: (ctx) => AlertDialog(
+        title: const Text("Incorrect Face"),
+        content: const Text("The detected face does not match. Please try again."),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              if (mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => CheckInCheckOutFormPage()),
+                );
+              }
+            },
+            child: const Text("OK"),
+          ),
+        ],
+      ),
     );
   }
 
   Future<void> _handleComparisonResult(bool isMatched) async {
-    if (!isMatched) {
+    if (!isMatched || !mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    final geoFencing = prefs.getBool("geo_fencing") ?? false;
+
+    if (geoFencing && widget.userLocation == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Face verification failed. Please try again.')),
+        const SnackBar(content: Text('Location unavailable. Cannot proceed.')),
       );
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var geo_fencing = prefs.getBool("geo_fencing");
+    try {
+      final endpoint = widget.attendanceState == 'NOT_CHECKED_IN'
+          ? 'api/attendance/clock-in/'
+          : 'api/attendance/clock-out/';
 
-    if (geo_fencing == true) {
-      if (widget.userLocation == null) {
+      final uri = Uri.parse('$typedServerUrl/$endpoint');
+      final headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer $token",
+      };
+
+      final body = geoFencing
+          ? jsonEncode({
+        "latitude": widget.userLocation!.latitude,
+        "longitude": widget.userLocation!.longitude,
+      })
+          : jsonEncode({});
+
+      final response = await http.post(uri, headers: headers, body: body);
+
+      if (response.statusCode == 200 && mounted) {
+        Navigator.pop(context, {
+          if (widget.attendanceState == 'NOT_CHECKED_IN') 'checkedIn': true,
+          if (widget.attendanceState == 'CHECKED_IN') 'checkedOut': true,
+        });
+      } else if (mounted) {
+        final errorMessage = getErrorMessage(response.body);
+        showCheckInFailedDialog(context, errorMessage);
+      }
+    } catch (e) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Location unavailable. Cannot proceed.')),
+          SnackBar(content: Text('Network error: $e')),
         );
-        return;
-      }
-    }
-
-
-
-    if (widget.attendanceState == 'NOT_CHECKED_IN') {
-      // Check-in
-      var uri = Uri.parse('$typedServerUrl/api/attendance/clock-in/');
-      if (geo_fencing == true) {
-        var response_geofence = await http.post(
-          uri,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer $token",
-          },
-          body: jsonEncode({
-            "latitude": widget.userLocation!.latitude,
-            "longitude": widget.userLocation!.longitude,
-          }),
-        );
-
-        if (response_geofence.statusCode == 200) {
-          Navigator.pop(context, {'checkedIn': true});
-        } else {
-          String errorMessage = getErrorMessage(response_geofence.body);
-          showCheckInFailedDialog(context, errorMessage);
-        }
-      }
-      else {
-        var response = await http.post(
-          uri,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer $token",
-          },
-          body: jsonEncode({
-          }),
-        );
-
-        if (response.statusCode == 200) {
-          Navigator.pop(context, {'checkedIn': true});
-        } else {
-          String errorMessage = getErrorMessage(response.body);
-          showCheckInFailedDialog(context, errorMessage);
-        }
-      }
-    } else if (widget.attendanceState == 'CHECKED_IN') {
-      // Check-out
-      var uri = Uri.parse('$typedServerUrl/api/attendance/clock-out/');
-      if (geo_fencing == true) {
-        var response_geofence = await http.post(
-          uri,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer $token",
-          },
-          body: jsonEncode({
-            "latitude": widget.userLocation!.latitude,
-            "longitude": widget.userLocation!.longitude,
-          }),
-        );
-        if (response_geofence.statusCode == 200) {
-          Navigator.pop(context, {'checkedOut': true});
-        } else {
-          String errorMessage = getErrorMessage(response_geofence.body);
-          showCheckInFailedDialog(context, errorMessage);
-        }
-      }
-      else {
-        var response = await http.post(
-          uri,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer $token",
-          },
-          body: jsonEncode({
-          }),
-        );
-        if (response.statusCode == 200) {
-          Navigator.pop(context, {'checkedOut': true});
-        } else {
-          String errorMessage = getErrorMessage(response.body);
-          showCheckInFailedDialog(context, errorMessage);
-        }
       }
     }
   }
 
   String getErrorMessage(String responseBody) {
     try {
-      final Map<String, dynamic> decoded = json.decode(responseBody);
+      final Map decoded = json.decode(responseBody);
       return decoded['message'] ?? 'Unknown error occurred';
     } catch (e) {
       return 'Error parsing server response';
@@ -338,27 +335,29 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
   void showCheckInFailedDialog(BuildContext context, String errorMessage) {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Check-in Failed'),
-          content: Text(errorMessage),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                Navigator.pop(context);
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
+      builder: (ctx) => AlertDialog(
+        title: const Text('Check-in Failed'),
+        content: Text(errorMessage),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              if (mounted) Navigator.pop(context);
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
     );
   }
 
   @override
   void dispose() {
     _animationController.dispose();
+    _isDetectionPaused = true;
+    if (_controller.cameraController.value.isInitialized) {
+      _controller.cameraController.dispose();
+    }
     super.dispose();
   }
 
@@ -422,28 +421,26 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    double screenWidth = MediaQuery.of(context).size.width;
-    double screenHeight = MediaQuery.of(context).size.height;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
 
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        title: Text('Face Detection', style: TextStyle(color: whiteColor)),
+        title: const Text('Face Detection'),
         backgroundColor: Colors.red,
         elevation: 0,
       ),
-      body: Stack(
-        children: [
-          Center(
-            child: Column(
-              children: [
-                SizedBox(height: screenHeight * 0.1),
-                _buildImageContainer(screenHeight, screenWidth),
-                SizedBox(height: screenHeight * 0.05),
-              ],
-            ),
-          ),
-        ],
+      body: Center(
+        child: Column(
+          children: [
+            SizedBox(height: screenHeight * 0.1),
+            _buildImageContainer(screenHeight, screenWidth),
+            SizedBox(height: screenHeight * 0.05),
+            if (_isFetchingImage)
+              const CircularProgressIndicator(),
+          ],
+        ),
       ),
     );
   }

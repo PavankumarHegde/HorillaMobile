@@ -157,6 +157,8 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   bool checkFile = false;
   bool isLoadingImage = false;
   XFile? pickedFile;
+  late String getToken = '';
+
 
   @override
   void initState() {
@@ -182,6 +184,15 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       getCompanies();
       getEmployeeType();
       _simulateLoading();
+      fetchToken();
+    });
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
     });
   }
 
@@ -284,92 +295,167 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   Future<void> getWorkTypeRequest() async {
     final args = ModalRoute.of(context)!.settings.arguments as Map;
     empId = args['employee_id'].toString();
+
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    List<dynamic> allResults = [];
+    int totalCount = 0;
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
-          '$typedServerUrl/api/base/worktype-requests?employee_id=$empId&page=$page');
+        '$typedServerUrl/api/base/worktype-requests?employee_id=$empId&page=$page',
+      );
+
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        setState(() {
-          employeeWorkTypeRequest = jsonDecode(response.body)['results'];
-          employeeWorkTypeRequestCount = jsonDecode(response.body)['count'];
-        });
+        final data = jsonDecode(response.body);
+        final results = data['results'];
+
+        if (results.isEmpty) break; // ✅ stop if no more data
+
+        allResults.addAll(results);
+        totalCount = data['count'];
+      } else {
+        print('Failed to load work type requests. Status: ${response.statusCode}');
+        break;
       }
     }
+
+    setState(() {
+      employeeWorkTypeRequest = allResults;
+      employeeWorkTypeRequestCount = totalCount;
+    });
   }
 
   Future<void> getRotatingWorkTypeRequest() async {
     final args = ModalRoute.of(context)!.settings.arguments as Map;
     empId = args['employee_id'].toString();
+
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    List<dynamic> allResults = [];
+    int totalCount = 0;
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
-          '$typedServerUrl/api/base/rotating-worktype-assigns/?employee_id=$empId&page=$page');
+        '$typedServerUrl/api/base/rotating-worktype-assigns/?employee_id=$empId&page=$page',
+      );
+
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        setState(() {
-          employeeRotatingWorkTypeRequest =
-          jsonDecode(response.body)['results'];
-          employeeRotatingWorkTypeRequestCount =
-          jsonDecode(response.body)['count'];
-        });
+        final data = jsonDecode(response.body);
+        final results = data['results'];
+
+        if (results.isEmpty) break;
+
+        allResults.addAll(results);
+        totalCount = data['count'];
+      } else {
+        print('Failed to fetch rotating work type requests: ${response.statusCode}');
+        break;
       }
     }
+
+    setState(() {
+      employeeRotatingWorkTypeRequest = allResults;
+      employeeRotatingWorkTypeRequestCount = totalCount;
+    });
   }
 
   Future<void> getShiftRequest() async {
     final args = ModalRoute.of(context)!.settings.arguments as Map;
     empId = args['employee_id'].toString();
+
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    List<dynamic> allResults = [];
+    int totalCount = 0;
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
-          '$typedServerUrl/api/base/shift-requests/?employee_id=$empId&page=$page');
+        '$typedServerUrl/api/base/shift-requests/?employee_id=$empId&page=$page',
+      );
+
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        setState(() {
-          employeeShiftRequest = jsonDecode(response.body)['results'];
-          employeeShiftRequestCount = jsonDecode(response.body)['count'];
-        });
+        final data = jsonDecode(response.body);
+        final results = data['results'];
+
+        if (results.isEmpty) break; // ✅ Exit loop when no more results
+
+        allResults.addAll(results);
+        totalCount = data['count'];
+      } else {
+        print('Failed to fetch shift requests: ${response.statusCode}');
+        break;
       }
     }
+
+    // ✅ Set state once with full data
+    setState(() {
+      employeeShiftRequest = allResults;
+      employeeShiftRequestCount = totalCount;
+    });
   }
 
   Future<void> getRotatingShiftRequest() async {
     final args = ModalRoute.of(context)!.settings.arguments as Map;
     empId = args['employee_id'].toString();
+
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    List<dynamic> allResults = [];
+    int totalCount = 0;
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
-          '$typedServerUrl/api/base/rotating-shift-assigns/?employee_id=$empId&page=$page');
+        '$typedServerUrl/api/base/rotating-shift-assigns/?employee_id=$empId&page=$page',
+      );
+
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        setState(() {
-          employeeRotatingShiftRequest = jsonDecode(response.body)['results'];
-          employeeRotatingShiftRequestCount =
-          jsonDecode(response.body)['count'];
-        });
+        final data = jsonDecode(response.body);
+        final results = data['results'];
+
+        if (results.isEmpty) break; // ✅ Stop if no more results
+
+        allResults.addAll(results);
+        totalCount = data['count'];
+      } else {
+        print('Error fetching rotating shift requests: ${response.statusCode}');
+        break;
       }
     }
+
+    // ✅ Update UI once after collecting all data
+    setState(() {
+      employeeRotatingShiftRequest = allResults;
+      employeeRotatingShiftRequestCount = totalCount;
+    });
   }
 
   Future<void> getEmployeeWorkInformation() async {
@@ -395,68 +481,107 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
     for (var page = 1;; page++) {
       var uri = Uri.parse('$typedServerUrl/api/base/job-roles/?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
         var responseBody = jsonDecode(response.body);
+
+        if (responseBody['results'] == null || responseBody['results'].isEmpty) {
+          break; // ✅ No more pages
+        }
+
         employeeJobRuleRecord = responseBody;
-        if (responseBody != null && responseBody['results'] != null) {
-          for (var rule in responseBody['results']) {
-            final jobRule = rule['job_role'] ?? '';
-            String jobRuleId = "${rule['id']}";
-            jobRuleItems.add(jobRule);
-            jobRuleIdMap[jobRule] = jobRuleId;
-            if (rule['id'] == employeeWorkInfoRecord['job_role_id']) {
-              jobRuleName = rule['job_role'];
-            }
+
+        for (var rule in responseBody['results']) {
+          final jobRule = rule['job_role'] ?? '';
+          String jobRuleId = "${rule['id']}";
+
+          jobRuleItems.add(jobRule);
+          jobRuleIdMap[jobRule] = jobRuleId;
+
+          if (rule['id'] == employeeWorkInfoRecord['job_role_id']) {
+            jobRuleName = rule['job_role'];
           }
         }
+      } else {
+        print('Failed to fetch job roles. Status code: ${response.statusCode}');
+        break; // ✅ Prevent infinite loop on failure
       }
     }
+
+    setState(() {});
   }
 
   Future<void> getEmployeeJobPosition() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
     for (var page = 1;; page++) {
       var uri = Uri.parse('$typedServerUrl/api/base/job-positions/?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        for (var position in jsonDecode(response.body)['results']) {
+        var responseBody = jsonDecode(response.body);
+        var results = responseBody['results'];
+
+        if (results == null || results.isEmpty) {
+          break; // ✅ Exit loop when no more pages
+        }
+
+        for (var position in results) {
           final positionName = position['job_position'] ?? '';
           String positionId = "${position['id']}";
           employeeJobPositionRecord.add(positionName);
           positionIdMap[positionName] = positionId;
         }
+      } else {
+        print("Failed to fetch job positions: ${response.statusCode}");
+        break; // ✅ Exit on error
       }
     }
+
+    setState(() {}); // ✅ Optional: update UI after loading all pages
   }
 
   Future<void> getReportingManager() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
     for (var page = 1;; page++) {
       var uri = Uri.parse('$typedServerUrl/api/employee/employees/?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        for (var employee in jsonDecode(response.body)['results']) {
+        var responseBody = jsonDecode(response.body);
+        var results = responseBody['results'];
+
+        if (results == null || results.isEmpty) {
+          break; // ✅ No more data, exit loop
+        }
+
+        for (var employee in results) {
           String firstName = "${employee['employee_first_name']}";
           String employeeId = "${employee['id']}";
           reportingManagerRecord.add(firstName);
           managerIdMap[firstName] = employeeId;
         }
+      } else {
+        print('Failed to fetch reporting managers: ${response.statusCode}');
+        break; // ✅ Stop on error to avoid infinite looping
       }
     }
   }
@@ -484,19 +609,31 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
     for (var page = 1;; page++) {
       var uri = Uri.parse('$typedServerUrl/api/base/companies/?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        for (var company in jsonDecode(response.body)['results']) {
+        var responseBody = jsonDecode(response.body);
+        var results = responseBody['results'];
+
+        if (results == null || results.isEmpty) {
+          break; // ✅ Exit loop if no more companies
+        }
+
+        for (var company in results) {
           String companyName = "${company['company']}";
           String companyId = "${company['id']}";
           companyRecord.add(companyName);
           companyIdMap[companyName] = companyId;
         }
+      } else {
+        print('Failed to fetch companies: ${response.statusCode}');
+        break; // ✅ Exit on API error
       }
     }
   }
@@ -505,19 +642,31 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
     for (var page = 1;; page++) {
       var uri = Uri.parse('$typedServerUrl/api/base/departments/?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
-        for (var department in jsonDecode(response.body)['results']) {
+        var responseBody = jsonDecode(response.body);
+        var results = responseBody['results'];
+
+        if (results == null || results.isEmpty) {
+          break; // ✅ Stop when no more departments
+        }
+
+        for (var department in results) {
           final departmentName = department['department'] ?? '';
           String departmentId = "${department['id']}";
           employeeJobDepartmentRecord.add(departmentName);
           departmentIdMap[departmentName] = departmentId;
         }
+      } else {
+        print('Failed to fetch departments: ${response.statusCode}');
+        break; // ✅ Prevent infinite loop on error
       }
     }
   }
@@ -549,6 +698,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
           '$typedServerUrl/api/employee/employee-selector?page=$page');
@@ -556,9 +706,17 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
+        var responseBody = jsonDecode(response.body);
+        var results = responseBody['results'];
+
+        if (results == null || results.isEmpty) {
+          break; // ✅ Stop if no more employees
+        }
+
         setState(() {
-          for (var employee in jsonDecode(response.body)['results']) {
+          for (var employee in results) {
             final firstName = employee['employee_first_name'] ?? '';
             final lastName = employee['employee_last_name'] ?? '';
             final fullName = (firstName.isEmpty ? '' : firstName) +
@@ -568,6 +726,9 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
             employeeIdMap[fullName] = employeeId;
           }
         });
+      } else {
+        print('Failed to fetch employees: ${response.statusCode}');
+        break; // ✅ Prevent infinite looping on error
       }
     }
   }
@@ -3386,7 +3547,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
           Center(
               child: isLoading
                   ? _buildLoadingWidget()
-                  : _buildEmployeeDetailsWidget()),
+                  : _buildEmployeeDetailsWidget(getToken)),
         ],
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
@@ -3979,7 +4140,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     );
   }
 
-  Widget _buildEmployeeDetailsWidget() {
+  Widget _buildEmployeeDetailsWidget(token) {
     final args =
     ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
     bool permissionCheck = args?['permission_check'] ?? false;
@@ -4025,6 +4186,9 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                       child: Image.network(
                                         baseUrl +
                                             employeeDetails['employee_profile'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,

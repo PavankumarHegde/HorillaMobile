@@ -90,30 +90,59 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
   late TabController _tabController;
   var employeeItems = [''];
   var leaveItems = [''];
+  bool _isLoadingMore = false;
+  bool _hasMoreAllRequests = true;
+  bool _hasMoreMyRequests = true;
+  int _allRequestsPage = 1;
+  int _myRequestsPage = 1;
+  late String getToken = '';
+
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_scrollListener);
     description.text = "";
-    getAllEmployeesName();
-    prefetchData();
+
     getBaseUrl();
+    fetchToken();
+    prefetchData();
     _simulateLoading();
 
-    _tabController =
-        TabController(length: allocationCheck ? 2 : 1, vsync: this);
+    _tabController = TabController(length: allocationCheck ? 2 : 1, vsync: this);
+
     if (!allocationCheck) {
-      getAllocationRequest();
-      getMyAllocationRequest();
+      _loadInitialData();
     } else {
       getMyAllocationRequest();
     }
 
-    getMyAllocationRequest();
     getLeaveTypes();
     getEmployees();
     checkUserAllocation();
+    getAllEmployeesName();
+
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() {
+      _allRequestsPage = 1;
+      _myRequestsPage = 1;
+      allRequests.clear();
+      myAllRequests.clear();
+    });
+    await Future.wait([
+      getAllocationRequest(),
+      getMyAllocationRequest(),
+    ]);
   }
 
   Future<void> checkPermissions() async {
@@ -217,11 +246,16 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
 
   void _scrollListener() {
     if (_scrollController.offset >=
-        _scrollController.position.maxScrollExtent &&
-        !_scrollController.position.outOfRange) {
-      currentPage++;
-      getAllocationRequest();
-      getMyAllocationRequest();
+        _scrollController.position.maxScrollExtent - 200 && // Load more before reaching exact bottom
+        !_scrollController.position.outOfRange &&
+        !_isLoadingMore) {
+      if (allocationCheck && _tabController.index == 0 && _hasMoreAllRequests) {
+        _allRequestsPage++;
+        getAllocationRequest();
+      } else if ((!allocationCheck || _tabController.index == 1) && _hasMoreMyRequests) {
+        _myRequestsPage++;
+        getMyAllocationRequest();
+      }
     }
   }
 
@@ -560,9 +594,6 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
     request.headers['Authorization'] = 'Bearer $token';
 
     var response = await request.send();
-    print('wwwwwwwww');
-    print(response.statusCode);
-    print(response);
 
     if (response.statusCode == 201) {
       isSaveClick = false;
@@ -598,34 +629,47 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
     employeeItem.clear();
-    for (var page = 1;; page++) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/employee/employee-selector?page=$page');
+    int page = 1;
+    bool hasMore = true;
+
+    while (hasMore) {
+      var uri = Uri.parse('$typedServerUrl/api/employee/employee-selector?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = data['results'];
+
+        if (results.isEmpty) {
+          hasMore = false;
+          break;
+        }
+
         setState(() {
-          for (var employee in jsonDecode(response.body)['results']) {
-            String fullName =
-                "${employee['employee_first_name']} ${employee['employee_last_name']}";
+          for (var employee in results) {
+            String fullName = "${employee['employee_first_name']} ${employee['employee_last_name']}".trim();
             String employeeId = "${employee['id']}";
             employeeItem.add(fullName);
             employeeIdMap[fullName] = employeeId;
           }
-          allEmployeeList = List<Map<String, dynamic>>.from(
-            jsonDecode(response.body)['results'],
-          );
+          allEmployeeList.addAll(List<Map<String, dynamic>>.from(results));
         });
+
+        page++;
+      } else {
+        print('Error fetching employees: ${response.statusCode}');
+        hasMore = false;
       }
     }
   }
 
   Future<void> updateMyRequest(Map<String, dynamic> updatedDetails, checkFile,
       String fileName, String filePath) async {
-    print(updatedDetails);
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -648,9 +692,6 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
 
     request.headers['Authorization'] = 'Bearer $token';
     var response = await request.send();
-    print('ooooooooooo');
-    print(response.statusCode);
-    print(response);
 
     if (response.statusCode == 201) {
       isSaveClick = false;
@@ -984,6 +1025,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                         MaterialPageRoute(
                                           builder: (context) => ImageViewer(
                                             imagePath: pdfPath,
+                                            token: getToken,
                                           ),
                                         ),
                                       );
@@ -1333,6 +1375,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                 MaterialPageRoute(
                                   builder: (context) => ImageViewer(
                                     imagePath: pdfPath,
+                                    token: getToken,
                                   ),
                                 ),
                               );
@@ -1455,151 +1498,96 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
   }
 
   Future<void> getMyAllocationRequest() async {
+    setState(() {
+      _isLoadingMore = true;
+    });
+
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var employeeID = prefs.getInt("employee_id");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
+
+    try {
       var uri = Uri.parse(
-          '$typedServerUrl/api/leave/user-allocation-request/?page=$currentPage&search=$searchText');
+          '$typedServerUrl/api/leave/user-allocation-request/?page=$_myRequestsPage&search=$searchText');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
 
       if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = List<Map<String, dynamic>>.from(data['results']);
+
         setState(() {
-          myAllRequests.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
+          if (_myRequestsPage == 1) {
+            myAllRequests = results;
+          } else {
+            myAllRequests.addAll(results);
           }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = myAllRequests.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          myAllRequests = uniqueMapStrings.map(deserializeMap).toList();
-          myLeaveAllocationCount = jsonDecode(response.body)['count'];
+          myLeaveAllocationCount = data['count'];
+          _hasMoreMyRequests = results.isNotEmpty &&
+              (myAllRequests.length < myLeaveAllocationCount);
           filteredRecords = filterMyAllocationRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
         });
       }
-    } else {
-      currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/user-allocation-request/?employee_id=$employeeID&search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
+    } catch (e) {
+      print('Error loading my allocation requests: $e');
+    } finally {
+      setState(() {
+        _isLoadingMore = false;
+        isLoading = false;
       });
-      if (response.statusCode == 200) {
-        setState(() {
-          myAllRequests.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = myAllRequests.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          myAllRequests = uniqueMapStrings.map(deserializeMap).toList();
-          myLeaveAllocationCount = jsonDecode(response.body)['count'];
-          filteredRecords = filterMyAllocationRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
     }
   }
 
   Future<void> getAllocationRequest() async {
+    if (_isLoadingMore) return;
+
+    setState(() {
+      _isLoadingMore = true;
+    });
+
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
+
+    try {
       var uri = Uri.parse(
-          '$typedServerUrl/api/leave/allocation-request?page=$currentPage&search=$searchText');
+          '$typedServerUrl/api/leave/allocation-request/?page=$_allRequestsPage&search=$searchText');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
 
       if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = List<Map<String, dynamic>>.from(data['results']);
+
         setState(() {
-          allRequests.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
+          if (_allRequestsPage == 1) {
+            allRequests = results;
+          } else {
+            allRequests.addAll(results);
           }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = allRequests.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          allRequests = uniqueMapStrings.map(deserializeMap).toList();
-          leaveAllocationRequestCount = jsonDecode(response.body)['count'];
+          leaveAllocationRequestCount = data['count'];
+          _hasMoreAllRequests = results.isNotEmpty &&
+              (allRequests.length < leaveAllocationRequestCount);
           filteredRecords = filterAllAllocationRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
         });
       }
-    } else {
-      currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/leave/allocation-request?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
+    } catch (e) {
+      print('Error loading allocation requests: $e');
+    } finally {
+      setState(() {
+        _isLoadingMore = false;
+        isLoading = false;
       });
-      if (response.statusCode == 200) {
-        setState(() {
-          allRequests.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings = allRequests.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          allRequests = uniqueMapStrings.map(deserializeMap).toList();
-          leaveAllocationRequestCount = jsonDecode(response.body)['count'];
-          filteredRecords = filterAllAllocationRecords(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
     }
   }
+
 
   Future<void> getCurrentLeaveRequest(String recordId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -1652,9 +1640,6 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
     }
     request.headers['Authorization'] = 'Bearer $token';
     var response = await request.send();
-    print('qqqqqqqqqqq');
-    print(response.statusCode);
-    print(response);
     if (response.statusCode == 201) {
       isSaveClick = false;
       _errorMessage = null;
@@ -2778,12 +2763,9 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: TextField(
-                          onChanged: (wardSearchValue) {
+                          onChanged: (value) {
                             setState(() {
-                              searchText = wardSearchValue;
-                              currentPage = 0;
-                              getAllocationRequest();
-                              getMyAllocationRequest();
+                              searchText = value;
                             });
                           },
                           decoration: InputDecoration(
@@ -2793,9 +2775,8 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                               borderSide: BorderSide.none,
                             ),
                             prefixIcon: Transform.scale(
-                              scale: 0.8, // Scale down the icon
-                              child: Icon(Icons.search,
-                                  color: Colors.blueGrey.shade300),
+                              scale: 0.8,
+                              child: Icon(Icons.search, color: Colors.blueGrey.shade300),
                             ),
                             contentPadding: const EdgeInsets.symmetric(
                                 vertical: 12.0, horizontal: 4.0),
@@ -2833,116 +2814,52 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
   }
 
   Widget buildTabContents(List<Map<String, dynamic>> myAllRequests) {
-    return SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (isLoading)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: ListView.builder(
-                controller: _scrollController,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: 10,
-                itemBuilder: (context, index) {
-                  return Shimmer.fromColors(
-                      baseColor: Colors.grey[300]!,
-                      highlightColor: Colors.grey[100]!,
-                      child: Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Container(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              border: Border.all(color: Colors.grey[50]!),
-                              borderRadius: BorderRadius.circular(8.0),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.grey.shade400.withOpacity(0.3),
-                                  spreadRadius: 2,
-                                  blurRadius: 5,
-                                  offset: const Offset(0, 3),
-                                ),
-                              ],
-                            ),
-                            child: Card(
-                              shape: RoundedRectangleBorder(
-                                side: const BorderSide(
-                                    color: Colors.white, width: 0.0),
-                                borderRadius: BorderRadius.circular(10.0),
-                              ),
-                              color: Colors.white,
-                              elevation: 0.1,
-                              child: Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: Column(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Container(
-                                          width: 40.0,
-                                          height: 40.0,
-                                          color: Colors.grey[300],
-                                        ),
-                                      ],
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.005),
-                                    Container(
-                                      height: 20.0,
-                                      color: Colors.grey[300],
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Container(
-                                      height: 20.0,
-                                      width: 80.0,
-                                      color: Colors.grey[300],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ));
-                },
-              ),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: ListView.builder(
-                controller: _scrollController,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: searchText.isEmpty
-                    ? myAllRequests.length
-                    : myAllRequests.length,
-                itemBuilder: (context, index) {
-                  final record = searchText.isEmpty
-                      ? myAllRequests[index]
-                      : myAllRequests[index];
-                  final fullName = record['employee_id']['full_name'];
-                  final profile = record['employee_id']['employee_profile'];
-                  final stateInfo = _getStateInfo(record['status']);
-                  return buildMyLeaveTiles(
-                      record, fullName, baseUrl, profile ?? "", stateInfo);
-                },
-              ),
-            ),
-        ],
-      ),
+    final displayedRecords = searchText.isEmpty
+        ? myAllRequests
+        : _filterRecords(myAllRequests, searchText);
+
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            itemCount: displayedRecords.length + (_hasMoreMyRequests ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index >= displayedRecords.length) {
+                return _buildLoader();
+              }
+
+              final record = displayedRecords[index];
+              final fullName = record['employee_id']['full_name'];
+              final profile = record['employee_id']['employee_profile'];
+              final stateInfo = _getStateInfo(record['status']);
+
+              return buildMyLeaveTiles(
+                  record, fullName, baseUrl, getToken, profile ?? "", stateInfo);
+            },
+          ),
+        ),
+      ],
     );
   }
 
-  Widget buildMyLeaveTiles(Map<String, dynamic> record, fullName, baseUrl,
+  List<Map<String, dynamic>> _filterRecords(List<Map<String, dynamic>> records, String query) {
+    if (query.isEmpty) return records;
+
+    return records.where((record) {
+      final employeeName = record['employee_id']['full_name']?.toString().toLowerCase() ?? '';
+      final leaveType = record['leave_type_id']['name']?.toString().toLowerCase() ?? '';
+      final status = record['status']?.toString().toLowerCase() ?? '';
+      final requestedDays = record['requested_days']?.toString().toLowerCase() ?? '';
+
+      return employeeName.contains(query.toLowerCase()) ||
+          leaveType.contains(query.toLowerCase()) ||
+          status.contains(query.toLowerCase()) ||
+          requestedDays.contains(query.toLowerCase());
+    }).toList();
+  }
+
+  Widget buildMyLeaveTiles(Map<String, dynamic> record, fullName, baseUrl,token,
       String profile, stateInfo) {
     return GestureDetector(
       onTap: () {
@@ -2997,6 +2914,9 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                             baseUrl +
                                                 record['employee_id']
                                                 ['employee_profile'],
+                                            headers: {
+                                              "Authorization": "Bearer $token",
+                                            },
                                             fit: BoxFit.cover,
                                             errorBuilder: (BuildContext context,
                                                 Object exception,
@@ -3156,6 +3076,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                         MaterialPageRoute(
                                           builder: (context) => ImageViewer(
                                             imagePath: pdfPath,
+                                            token: getToken,
                                           ),
                                         ),
                                       );
@@ -3238,6 +3159,9 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                     baseUrl +
                                         record['employee_id']
                                         ['employee_profile'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -3475,39 +3399,48 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
     );
   }
 
+
   Widget buildTabContent(List<Map<String, dynamic>> allRequests) {
+    final displayedRecords = searchText.isEmpty
+        ? allRequests
+        : _filterRecords(allRequests, searchText);
+
     return Column(
-      mainAxisSize: MainAxisSize.min,
       children: [
         Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: ListView.builder(
-              controller: _scrollController,
-              shrinkWrap: true,
-              itemCount: searchText.isEmpty
-                  ? allRequests.length
-                  : filteredRecords.length,
-              itemBuilder: (context, index) {
-                final record = searchText.isEmpty
-                    ? allRequests[index]
-                    : filteredRecords[index];
-                final fullName = record['employee_id']['full_name'];
-                final profile = record['employee_id']['employee_profile'];
-                final stateInfo = _getStateInfo(record['status']);
-                final recordId = record['id'].toString();
-                return buildAllLeaveTile(record, fullName, baseUrl,
-                    profile ?? "", stateInfo, recordId);
-              },
-            ),
+          child: ListView.builder(
+            controller: _scrollController,
+            itemCount: displayedRecords.length + (_hasMoreAllRequests ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index >= displayedRecords.length) {
+                return _buildLoader();
+              }
+
+              final record = displayedRecords[index];
+              final fullName = record['employee_id']['full_name'];
+              final profile = record['employee_id']['employee_profile'];
+              final stateInfo = _getStateInfo(record['status']);
+              final recordId = record['id'].toString();
+
+              return buildAllLeaveTile(record, fullName, baseUrl,getToken,
+                  profile ?? "", stateInfo, recordId);
+            },
           ),
         ),
       ],
-      // ),
     );
   }
 
-  Widget buildAllLeaveTile(Map<String, dynamic> record, fullName, baseUrl,
+  Widget _buildLoader() {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+  }
+
+  Widget buildAllLeaveTile(Map<String, dynamic> record, fullName, baseUrl,token,
       String profile, stateInfo, String recordId) {
     return GestureDetector(
       onTap: () async {
@@ -3561,6 +3494,9 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                         baseUrl +
                                             record['employee_id']
                                             ['employee_profile'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,
@@ -3723,6 +3659,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                     MaterialPageRoute(
                                       builder: (context) => ImageViewer(
                                         imagePath: pdfPath,
+                                        token: getToken,
                                       ),
                                     ),
                                   );
@@ -4003,6 +3940,9 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                     baseUrl +
                                         record['employee_id']
                                         ['employee_profile'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -4472,8 +4412,9 @@ StateInfo _getStateInfo(String state) {
 
 class ImageViewer extends StatelessWidget {
   final String imagePath;
+  final String token;
 
-  const ImageViewer({super.key, required this.imagePath});
+  const ImageViewer({super.key, required this.imagePath, required this.token});
 
   @override
   Widget build(BuildContext context) {
@@ -4490,6 +4431,9 @@ class ImageViewer extends StatelessWidget {
         child: isNetworkImage
             ? Image.network(
           imagePath,
+          headers: {
+            "Authorization": "Bearer $token",
+          },
           errorBuilder: (context, error, stackTrace) {
             return const Text(
               'Error loading image',

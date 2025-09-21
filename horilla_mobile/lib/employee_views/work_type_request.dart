@@ -88,6 +88,8 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
   Map<String, String> employeeIdMap = {};
   Map<String, String> workTypeIdMap = {};
   bool isCreateButtonVisible = true;
+  late String getToken = '';
+
 
 
   @override
@@ -103,8 +105,17 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
       getEmployees();
       getWorkType();
       getBaseUrl();
+      fetchToken();
       _simulateLoading();
       createVisibility();
+    });
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
     });
   }
 
@@ -161,9 +172,6 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
     });
-    print('ttttttttttttttttt');
-    print(response.statusCode);
-    print(response.body);
     if (response.statusCode == 200) {
       approveRejectCheck = true;
     }
@@ -331,10 +339,6 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
       "Authorization": "Bearer $token",
     });
 
-    print('Request URI: $uri');
-    print('Response Status Code: ${response.statusCode}');
-    print('Response Body: ${response.body}');
-
     if (response.statusCode == 200) {
       setState(() {
         // Clear previous data
@@ -368,38 +372,6 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
     }
   }
 
-  // Future<void> getEmployees() async {
-  //   final prefs = await SharedPreferences.getInstance();
-  //   var token = prefs.getString("token");
-  //   var typedServerUrl = prefs.getString("typed_url");
-  //   var employeeId = prefs.getInt("employee_id");
-  //     var uri = Uri.parse(
-  //         '$typedServerUrl/api/employee/employee-selector?employee_id=$employeeId');
-  //     var response = await http.get(uri, headers: {
-  //       "Content-Type": "application/json",
-  //       "Authorization": "Bearer $token",
-  //     });
-  //     print('eeeeeeeeeeeeeeeeeeeeeeeee $uri');
-  //     print(response.statusCode);
-  //     print(response.body);
-  //     if (response.statusCode == 200) {
-  //       setState(() {
-  //         for (var employee in jsonDecode(response.body)['results']) {
-  //           final firstName = employee['employee_first_name'] ?? '';
-  //           final lastName = employee['employee_last_name'] ?? '';
-  //           final fullName = (firstName.isEmpty ? '' : firstName) +
-  //               (lastName.isEmpty ? '' : ' $lastName');
-  //           String employeeId = "${employee['id']}";
-  //           employeeItems.add(fullName);
-  //           employeeIdMap[fullName] = employeeId;
-  //         }
-  //         allEmployeeList = List<Map<String, dynamic>>.from(
-  //           jsonDecode(response.body)['results'],
-  //         );
-  //       });
-  //     }
-  //
-  // }
 
   Future<void> addOvertime() async {
     final prefs = await SharedPreferences.getInstance();
@@ -1739,7 +1711,7 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
     );
   }
 
-  Widget buildListItem(Map<String, dynamic> record, baseUrl) {
+  Widget buildListItem(Map<String, dynamic> record, baseUrl,token) {
     return GestureDetector(
       onTap: () {
         showDialog(
@@ -1790,6 +1762,9 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
                                       child: Image.network(
                                         baseUrl +
                                             employeeDetails['employee_profile'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,
@@ -2484,6 +2459,9 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
                                   child: Image.network(
                                     baseUrl +
                                         employeeDetails['employee_profile'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -3542,7 +3520,7 @@ class _WorkTypeRequestPageState extends State<WorkTypeRequestPage> {
                   final record = searchText.isEmpty
                       ? requests[index]
                       : filteredRecords[index];
-                  return buildListItem(record, baseUrl);
+                  return buildListItem(record, baseUrl, getToken);
                 },
               ),
             ),

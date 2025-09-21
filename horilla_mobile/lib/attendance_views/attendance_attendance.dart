@@ -37,10 +37,13 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   TextEditingController checkInTimeValidated = TextEditingController();
   TextEditingController checkOutTimeValidated = TextEditingController();
   List<Map<String, dynamic>> requestsNonValidAttendance = [];
+  List<Map<String, dynamic>> requestsMyAttendance = [];
   List<Map<String, dynamic>> requestsOvertimeAttendance = [];
   List<Map<String, dynamic>> requestsValidatedAttendance = [];
   List<Map<String, dynamic>> requestsShiftNames = [];
   List<Map<String, dynamic>> filteredNonValidAttendance = [];
+  List<Map<String, dynamic>> filteredMyAttendance = [];
+
   List<Map<String, dynamic>> filteredOvertimeAttendance = [];
   List<Map<String, dynamic>> filteredValidatedAttendance = [];
   List<String> shiftDetails = [];
@@ -87,6 +90,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   bool _validateCheckOut = false;
   bool permissionCheck = false;
   bool managerCheck = false;
+  bool attendanceTypeCheck = false;
   bool isAction = true;
   bool createAttendance = false;
   bool isSaveClick = true;
@@ -99,23 +103,52 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   Map<String, String> shiftIdMap = {};
   int currentPage = 1;
   int toValidate = 0;
+  int myAttendances = 0;
   int overtime = 0;
   int validated = 0;
   Timer? _debounce;
+  bool isFetchingMore = false;
+  bool hasMoreMyAttendance = true;
+  bool hasMoreNonValidated = true;
+  bool hasMoreOvertime = true;
+  bool hasMoreValidated = true;
+
+
+  bool _permissionOverview = false;
+  bool _permissionAttendance = false;
+  bool _permissionAttendanceRequest = false;
+  bool _permissionHourAccount = false;
+  bool _permissionsLoaded = false;
+  late String getToken = '';
+
 
   @override
   void initState() {
     super.initState();
+    currentPage = 1;
     prefetchData();
     _simulateLoading();
     _scrollController.addListener(_scrollListener);
-    getAllNonValidatedAttendance();
-    getAllOvertimeAttendance();
-    getAllValidatedAttendance();
+    getMyAttendance(reset: true);
+    getAllNonValidatedAttendance(reset: true);
+    getAllOvertimeAttendance(reset: true);
+    getAllValidatedAttendance(reset: true);
     getEmployees();
     getShiftDetails();
+    attendanceTypeChecks();
     managerChecks();
     getBaseUrl();
+    fetchToken();
+    loadPermissionsFromStorage();
+
+    // Load permissions once
+    permissionChecks().then((_) {
+      setState(() {
+        _permissionsLoaded = true;
+      });
+    });
+
+    // Initialize controllers
     dateInput.text = "";
     checkInTime.text = "";
     checkOutTime.text = "";
@@ -130,6 +163,17 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   Future<void> _simulateLoading() async {
     await Future.delayed(const Duration(seconds: 5));
     setState(() {});
+  }
+
+  Future loadPermissionsFromStorage() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _permissionOverview = prefs.getBool("perm_overview") ?? false;
+      _permissionAttendance = prefs.getBool("perm_attendance") ?? false;
+      _permissionAttendanceRequest = prefs.getBool("perm_attendance_request") ?? false;
+      _permissionHourAccount = prefs.getBool("perm_hour_account") ?? false;
+      _permissionsLoaded = true;
+    });
   }
 
   @override
@@ -148,14 +192,29 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
     });
   }
 
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+      print('token: $getToken');
+    });
+  }
+
   void _scrollListener() {
-    if (_scrollController.offset >=
-        _scrollController.position.maxScrollExtent &&
-        !_scrollController.position.outOfRange) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 100 &&
+        !isFetchingMore) {
+      setState(() => isFetchingMore = true);
       currentPage++;
-      getAllNonValidatedAttendance();
-      getAllOvertimeAttendance();
-      getAllValidatedAttendance();
+      Future.wait([
+        getMyAttendance(),
+        getAllNonValidatedAttendance(),
+        getAllOvertimeAttendance(),
+        getAllValidatedAttendance()
+      ]).then((_) {
+        setState(() => isFetchingMore = false);
+      });
     }
   }
 
@@ -331,226 +390,197 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
     });
   }
 
-  Future<void> getAllNonValidatedAttendance() async {
+
+  Future getMyAttendance({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/attendance/attendance/list/non-validated?page=$currentPage&search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestsNonValidAttendance.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
 
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings =
-          requestsNonValidAttendance.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestsNonValidAttendance =
-              uniqueMapStrings.map(deserializeMap).toList();
-          toValidate = jsonDecode(response.body)['count'];
-          filteredNonValidAttendance = filterNonValidAttendance(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
-    } else {
+    if (reset) {
       currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/attendance/attendance/list/non-validated?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
+      requestsMyAttendance.clear();
+      hasMoreMyAttendance = true;
+    }
+    if (!hasMoreMyAttendance) return; // 🚫 No more data, skip
+
+    var uri = Uri.parse(
+        '$typedServerUrl/api/attendance/my-attendance?page=$currentPage&search=$searchText');
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token"
+    });
+
+    if (response.statusCode == 200) {
+      final results = List<Map<String, dynamic>>.from(
+          jsonDecode(response.body)['results'] ?? []);
+
+      setState(() {
+        requestsMyAttendance.addAll(results);
+        requestsMyAttendance = requestsMyAttendance
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        myAttendances = jsonDecode(response.body)['count'] ?? 0;
+        filteredMyAttendance = filterMyAttendance(searchText);
+        isLoading = false;
       });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestsNonValidAttendance = List<Map<String, dynamic>>.from(
-            jsonDecode(response.body)['results'],
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings =
-          requestsNonValidAttendance.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestsNonValidAttendance =
-              uniqueMapStrings.map(deserializeMap).toList();
-          toValidate = jsonDecode(response.body)['count'];
-          filteredNonValidAttendance = filterNonValidAttendance(searchText);
-          setState(() {
-            isLoading = false;
-          });
-        });
-      }
+    }
+    else if (response.statusCode == 404) {
+      hasMoreMyAttendance = false;
+      return;
     }
   }
 
-  Future<void> getAllOvertimeAttendance() async {
+  Future getAllNonValidatedAttendance({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/attendance/attendance/list/ot?page=$currentPage&search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestsOvertimeAttendance.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings =
-          requestsOvertimeAttendance.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestsOvertimeAttendance =
-              uniqueMapStrings.map(deserializeMap).toList();
-
-          overtime = jsonDecode(response.body)['count'];
-          filteredOvertimeAttendance = filterOvertimeAttendance(searchText);
-        });
-      }
-    } else {
+    if (reset) {
       currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/attendance/attendance/list/ot?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
+      requestsNonValidAttendance.clear();
+      hasMoreNonValidated = true;
+    }
+    if (!hasMoreNonValidated) return;
+
+
+
+    var uri = Uri.parse(
+        '$typedServerUrl/api/attendance/attendance/list/non-validated?page=$currentPage&search=$searchText');
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token"
+    });
+
+    if (response.statusCode == 200) {
+      final results = List<Map<String, dynamic>>.from(
+          jsonDecode(response.body)['results'] ?? []);
+
+
+      setState(() {
+        requestsNonValidAttendance.addAll(results);
+        requestsNonValidAttendance = requestsNonValidAttendance
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        toValidate = jsonDecode(response.body)['count'] ?? 0;
+        filteredNonValidAttendance = filterNonValidAttendance(searchText);
+        isLoading = false;
       });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestsOvertimeAttendance = List<Map<String, dynamic>>.from(
-            jsonDecode(response.body)['results'],
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings =
-          requestsOvertimeAttendance.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestsOvertimeAttendance =
-              uniqueMapStrings.map(deserializeMap).toList();
-          overtime = jsonDecode(response.body)['count'];
-          filteredOvertimeAttendance = filterOvertimeAttendance(searchText);
-        });
-      }
+    }
+    else if (response.statusCode == 404) {
+      hasMoreNonValidated = false;
+      return;
     }
   }
 
-  Future<void> getAllValidatedAttendance() async {
+  Future getAllOvertimeAttendance({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    if (currentPage != 0) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/attendance/attendance/list/validated?page=$currentPage&search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestsValidatedAttendance.addAll(
-            List<Map<String, dynamic>>.from(
-              jsonDecode(response.body)['results'],
-            ),
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
 
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings =
-          requestsValidatedAttendance.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestsValidatedAttendance =
-              uniqueMapStrings.map(deserializeMap).toList();
-          validated = jsonDecode(response.body)['count'];
-          filteredValidatedAttendance = filterValidateRecords(searchText);
-        });
-      }
-    } else {
+    if (reset) {
       currentPage = 1;
-      var uri = Uri.parse(
-          '$typedServerUrl/api/attendance/attendance/list/validated?search=$searchText');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
+      requestsOvertimeAttendance.clear();
+      hasMoreOvertime = true;
+    }
+    if (!hasMoreOvertime) return;
+
+    var uri = Uri.parse(
+        '$typedServerUrl/api/attendance/attendance/list/ot?page=$currentPage&search=$searchText');
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token"
+    });
+
+    if (response.statusCode == 200) {
+      final results = List<Map<String, dynamic>>.from(
+          jsonDecode(response.body)['results'] ?? []);
+
+      setState(() {
+        requestsOvertimeAttendance.addAll(results);
+        requestsOvertimeAttendance = requestsOvertimeAttendance
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        overtime = jsonDecode(response.body)['count'] ?? 0;
+        filteredOvertimeAttendance = filterOvertimeAttendance(searchText);
+        isLoading = false;
       });
-      if (response.statusCode == 200) {
-        setState(() {
-          requestsValidatedAttendance = List<Map<String, dynamic>>.from(
-            jsonDecode(response.body)['results'],
-          );
-          String serializeMap(Map<String, dynamic> map) {
-            return jsonEncode(map);
-          }
-
-          Map<String, dynamic> deserializeMap(String jsonString) {
-            return jsonDecode(jsonString);
-          }
-
-          List<String> mapStrings =
-          requestsValidatedAttendance.map(serializeMap).toList();
-          Set<String> uniqueMapStrings = mapStrings.toSet();
-          requestsValidatedAttendance =
-              uniqueMapStrings.map(deserializeMap).toList();
-
-          validated = jsonDecode(response.body)['count'];
-          filteredValidatedAttendance = filterValidateRecords(searchText);
-        });
-      }
+    }
+    else if (response.statusCode == 404) {
+      hasMoreOvertime = false;
+      return;
     }
   }
+
+  Future getAllValidatedAttendance({bool reset = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    var typedServerUrl = prefs.getString("typed_url");
+
+    if (reset) {
+      currentPage = 1;
+      requestsValidatedAttendance.clear();
+      hasMoreValidated = true;
+    }
+    if (!hasMoreValidated) return;
+    print('current page: $currentPage');
+
+
+    var uri = Uri.parse(
+        '$typedServerUrl/api/attendance/attendance/list/validated?page=$currentPage&search=$searchText');
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token"
+    });
+
+    if (response.statusCode == 200) {
+      final results = List<Map<String, dynamic>>.from(
+          jsonDecode(response.body)['results'] ?? []);
+
+      setState(() {
+        requestsValidatedAttendance.addAll(results);
+        requestsValidatedAttendance = requestsValidatedAttendance
+            .map((m) => jsonEncode(m))
+            .toSet()
+            .map((s) => jsonDecode(s) as Map<String, dynamic>)
+            .toList();
+        validated = jsonDecode(response.body)['count'] ?? 0;
+        filteredValidatedAttendance = filterValidateRecords(searchText);
+        isLoading = false;
+      });
+    }
+    else if (response.statusCode == 404) {
+      hasMoreValidated = false;
+      return;
+    }
+  }
+
 
   List<Map<String, dynamic>> filterNonValidAttendance(String searchText) {
     if (searchText.isEmpty) {
       return requestsNonValidAttendance;
     } else {
       return requestsNonValidAttendance.where((record) {
-        final firstName = record['employee_first_name'] ?? '';
-        final lastName = record['employee_last_name'] ?? '';
+        final firstName = record['employee_first_name']?.toString() ?? '';
+        final lastName = record['employee_last_name']?.toString() ?? '';
+        final fullName = (firstName + ' ' + lastName).toLowerCase();
+        return fullName.contains(searchText.toLowerCase());
+      }).toList();
+    }
+  }
+
+  List<Map<String, dynamic>> filterMyAttendance(String searchText) {
+    if (searchText.isEmpty) {
+      return requestsMyAttendance;
+    } else {
+      return requestsMyAttendance.where((record) {
+        final firstName = record['employee_first_name']?.toString() ?? '';
+        final lastName = record['employee_last_name']?.toString() ?? '';
         final fullName = (firstName + ' ' + lastName).toLowerCase();
         return fullName.contains(searchText.toLowerCase());
       }).toList();
@@ -562,8 +592,8 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
       return requestsOvertimeAttendance;
     } else {
       return requestsOvertimeAttendance.where((record) {
-        final firstName = record['employee_first_name'] ?? '';
-        final lastName = record['employee_last_name'] ?? '';
+        final firstName = record['employee_first_name']?.toString() ?? '';
+        final lastName = record['employee_last_name']?.toString() ?? '';
         final fullName = (firstName + ' ' + lastName).toLowerCase();
         return fullName.contains(searchText.toLowerCase());
       }).toList();
@@ -575,8 +605,8 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
       return requestsValidatedAttendance;
     } else {
       return requestsValidatedAttendance.where((record) {
-        final firstName = record['employee_first_name'] ?? '';
-        final lastName = record['employee_last_name'] ?? '';
+        final firstName = record['employee_first_name']?.toString() ?? '';
+        final lastName = record['employee_last_name']?.toString() ?? '';
         final fullName = (firstName + ' ' + lastName).toLowerCase();
         return fullName.contains(searchText.toLowerCase());
       }).toList();
@@ -623,29 +653,57 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
     }
   }
 
-  Future<void> permissionChecks() async {
+  Future permissionChecks() async {
+    if (_permissionsLoaded) return;
 
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    var uri =
-    Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      permissionCheck = true;
-      permissionOverview = true;
-      permissionAttendance = true;
-      permissionAttendanceRequest = true;
-      permissionHourAccount = true;
-    }
-    else{
-      permissionAttendanceRequest = true;
-      permissionHourAccount = true;
+
+    try {
+      var uri = Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance');
+      var response = await http.get(uri, headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer $token",
+      });
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _permissionOverview = true;   // ✅ Allowed
+          _permissionAttendance = true;
+          _permissionAttendanceRequest = true;
+          _permissionHourAccount = true;
+          _permissionsLoaded = true;
+        });
+      } else {
+        setState(() {
+          _permissionOverview = false;
+          _permissionAttendance = true;
+          _permissionAttendanceRequest = true;
+          _permissionHourAccount = true;
+          _permissionsLoaded = true;
+        });
+      }
+
+      // Save to local storage
+      await prefs.setBool("perm_overview", _permissionOverview);
+      await prefs.setBool("perm_attendance", _permissionAttendance);
+      await prefs.setBool("perm_attendance_request", _permissionAttendanceRequest);
+      await prefs.setBool("perm_hour_account", _permissionHourAccount);
+
+    } catch (e) {
+      debugPrint('Error checking permissions: $e');
+      // On error, maybe hide Overview
+      setState(() {
+        _permissionOverview = false;
+        _permissionAttendance = true;
+        _permissionAttendanceRequest = true;
+        _permissionHourAccount = true;
+        _permissionsLoaded = true;
+      });
     }
   }
+
 
   void managerChecks() async {
     final prefs = await SharedPreferences.getInstance();
@@ -658,6 +716,21 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
     });
     if (response.statusCode == 200) {
       managerCheck = true;
+    }
+  }
+
+  void attendanceTypeChecks() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    var typedServerUrl = prefs.getString("typed_url");
+    var uri = Uri.parse('$typedServerUrl/api/attendance/attendance-type-check/');
+    var response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    });
+    if (response.statusCode == 200) {
+      print(response.body);
+      attendanceTypeCheck = true;
     }
   }
 
@@ -686,25 +759,38 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    employeeItems.clear();
+    employeeIdMap.clear();
+
     for (var page = 1;; page++) {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/employee/employee-selector?page=$page');
+      print('Fetching employee page: $page');
+      var uri = Uri.parse('$typedServerUrl/api/employee/employee-selector?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = data['results'];
+
+        // ✅ Break when no more employees are returned
+        if (results.isEmpty) break;
+
         setState(() {
-          for (var employee in jsonDecode(response.body)['results']) {
+          for (var employee in results) {
             final firstName = employee['employee_first_name'] ?? '';
             final lastName = employee['employee_last_name'] ?? '';
-            final fullName = (firstName.isEmpty ? '' : firstName) +
-                (lastName.isEmpty ? '' : ' $lastName');
-            String employeeId = "${employee['id']}";
+            final fullName = '$firstName $lastName'.trim();
+            final employeeId = "${employee['id']}";
             employeeItems.add(fullName);
             employeeIdMap[fullName] = employeeId;
           }
         });
+      } else {
+        print("Error fetching employees: ${response.statusCode}");
+        break;
       }
     }
   }
@@ -741,6 +827,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
       _errorMessage = null;
       createAttendance = true;
       currentPage = 0;
+      getMyAttendance();
       getAllNonValidatedAttendance();
       getAllOvertimeAttendance();
       getAllValidatedAttendance();
@@ -814,6 +901,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
       isSaveClick = false;
       _errorMessage = null;
       currentPage = 0;
+      getMyAttendance();
       getAllNonValidatedAttendance();
       getAllOvertimeAttendance();
       setState(() {});
@@ -965,6 +1053,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
     if (response.statusCode == 200) {
       isSaveClick = false;
       currentPage = 0;
+      getMyAttendance();
       getAllNonValidatedAttendance();
       setState(() {});
       showDeleteAnimation();
@@ -3004,7 +3093,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         backgroundColor: Colors.white,
         key: _scaffoldKey,
@@ -3073,88 +3162,74 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
           ],
         ),
         body: isLoading ? _buildLoadingWidget() : _buildEmployeeDetailsWidget(),
-        drawer: Drawer(
-          child: FutureBuilder<void>(
-            future: permissionChecks(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return ListView(
-                  padding: const EdgeInsets.all(0),
-                  children: [
-                    DrawerHeader(
-                      decoration: const BoxDecoration(),
-                      child: FittedBox(
-                        fit: BoxFit.contain,
-                        child: SizedBox(
-                          width: 80,
-                          height: 80,
-                          child: Image.asset(
-                            'Assets/horilla-logo.png',
-                          ),
-                        ),
-                      ),
-                    ),
-                    shimmerListTile(),
-                    shimmerListTile(),
-                    shimmerListTile(),
-                    shimmerListTile(),
-                  ],
-                );
-              } else if (snapshot.hasError) {
-                return const Center(child: Text('Error loading permissions.'));
-              } else {
-                return ListView(
-                  padding: const EdgeInsets.all(0),
-                  children: [
-                    DrawerHeader(
-                      decoration: const BoxDecoration(),
-                      child: FittedBox(
-                        fit: BoxFit.contain,
-                        child: SizedBox(
-                          width: 80,
-                          height: 80,
-                          child: Image.asset(
-                            'Assets/horilla-logo.png',
-                          ),
-                        ),
-                      ),
-                    ),
-                    permissionOverview
-                        ? ListTile(
-                      title: const Text('Overview'),
-                      onTap: () {
-                        Navigator.pushNamed(context, '/attendance_overview');
-                      },
-                    )
-                        : const SizedBox.shrink(),
-                    permissionAttendance
-                        ? ListTile(
-                      title: const Text('Attendance'),
-                      onTap: () {
-                        Navigator.pushNamed(context, '/attendance_attendance');
-                      },
-                    )
-                        : const SizedBox.shrink(),
-                    permissionAttendanceRequest
-                        ? ListTile(
-                      title: const Text('Attendance Request'),
-                      onTap: () {
-                        Navigator.pushNamed(context, '/attendance_request');
-                      },
-                    )
-                        : const SizedBox.shrink(),
-                    permissionHourAccount
-                        ? ListTile(
-                      title: const Text('Hour Account'),
-                      onTap: () {
-                        Navigator.pushNamed(context, '/employee_hour_account');
-                      },
-                    )
-                        : const SizedBox.shrink(),
-                  ],
-                );
-              }
-            },
+        drawer: _permissionsLoaded
+            ? Drawer(
+          child: ListView(
+            padding: const EdgeInsets.all(0),
+            children: [
+              DrawerHeader(
+                decoration: const BoxDecoration(),
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: SizedBox(
+                    width: 80,
+                    height: 80,
+                    child: Image.asset('Assets/horilla-logo.png'),
+                  ),
+                ),
+              ),
+              // Only show Overview if permission is true
+              if (_permissionOverview)
+                ListTile(
+                  title: const Text('Overview'),
+                  onTap: () { Navigator.pushNamed(context, '/attendance_overview'); },
+                ),
+              // Always show Attendance (default permission is true)
+              ListTile(
+                title: const Text('Attendance'),
+                onTap: () {
+                  Navigator.pushNamed(context, '/attendance_attendance');
+                },
+              ),
+              // Only show if permission is true
+              if (_permissionAttendanceRequest)
+                ListTile(
+                  title: const Text('Attendance Request'),
+                  onTap: () {
+                    Navigator.pushNamed(context, '/attendance_request');
+                  },
+                ),
+              // Only show if permission is true
+              if (_permissionHourAccount)
+                ListTile(
+                  title: const Text('Hour Account'),
+                  onTap: () {
+                    Navigator.pushNamed(context, '/employee_hour_account');
+                  },
+                ),
+            ],
+          ),
+        )
+            : Drawer( // Loading state
+          child: ListView(
+            padding: const EdgeInsets.all(0),
+            children: [
+              DrawerHeader(
+                decoration: const BoxDecoration(),
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: SizedBox(
+                    width: 80,
+                    height: 80,
+                    child: Image.asset('Assets/horilla-logo.png'),
+                  ),
+                ),
+              ),
+              shimmerListTile(),
+              shimmerListTile(),
+              shimmerListTile(),
+              shimmerListTile(),
+            ],
           ),
         ),
         bottomNavigationBar: (bottomBarPages.length <= maxCount)
@@ -3277,23 +3352,13 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
           ),
         ),
         SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-        TabBar(
-          // TabBar for tab selection
-          labelColor: Colors.red,
-          indicatorColor: Colors.red,
-
-          unselectedLabelColor: Colors.grey,
-          isScrollable: true,
-          tabs: [
-            Tab(text: 'To Validate ($toValidate)'),
-            Tab(text: 'Overtime ($overtime)'),
-            Tab(text: 'Validated ($validated)'),
-          ],
-        ),
+        _buildTabBarShimmer(),
         SizedBox(height: MediaQuery.of(context).size.height * 0.03),
         Expanded(
           child: TabBarView(
             children: [
+              buildMyAttendanceLoadingAttendanceContent(
+                  requestsMyAttendance, _scrollController, searchText),
               buildValidateLoadingAttendanceContent(
                   requestsNonValidAttendance, _scrollController, searchText),
               buildOvertimeLoadingAttendanceContent(
@@ -3306,6 +3371,30 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
       ],
     );
   }
+
+  Widget _buildTabBarShimmer() {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: List.generate(4, (index) {
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 8.0),
+              height: 30.0,
+              width: 120.0,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16.0),
+              ),
+            );
+          }),
+        ),
+      ),
+    );
+  }
+
 
   Widget _buildEmployeeDetailsWidget() {
     return Stack(
@@ -3330,23 +3419,26 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                             if (_debounce?.isActive ?? false) {
                               _debounce!.cancel();
                             }
-                            _debounce =
-                                Timer(const Duration(milliseconds: 1000), () {
-                                  setState(() {
-                                    searchText = employeeSearchValue;
-                                    requestsNonValidAttendance.clear();
-                                    requestsValidatedAttendance.clear();
-                                    requestsOvertimeAttendance.clear();
-                                    currentPage = 0;
-                                    getAllNonValidatedAttendance();
-                                    getAllOvertimeAttendance();
-                                    getAllValidatedAttendance();
-                                  });
-                                });
+                            _debounce = Timer(const Duration(milliseconds: 500), () {
+                              setState(() {
+                                searchText = employeeSearchValue;
+                                // Reset to page 1 when searching
+                                currentPage = 1;
+                                requestsMyAttendance.clear();
+                                requestsNonValidAttendance.clear();
+                                requestsOvertimeAttendance.clear();
+                                requestsValidatedAttendance.clear();
+
+                                // Fetch data with search filter
+                                getMyAttendance(reset: true);
+                                getAllNonValidatedAttendance(reset: true);
+                                getAllOvertimeAttendance(reset: true);
+                                getAllValidatedAttendance(reset: true);
+                              });
+                            });
                           },
                           decoration: InputDecoration(
-                            hintStyle: TextStyle(
-                                color: Colors.blueGrey.shade300, fontSize: 14),
+                            hintStyle: TextStyle(color: Colors.blueGrey.shade300, fontSize: 14),
                             hintText: 'Search',
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8.0),
@@ -3355,9 +3447,8 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                             filled: true,
                             fillColor: Colors.grey[100],
                             prefixIcon: Transform.scale(
-                              scale: 0.8, // Scale down the icon
-                              child: Icon(Icons.search,
-                                  color: Colors.blueGrey.shade300),
+                              scale: 0.8,
+                              child: Icon(Icons.search, color: Colors.blueGrey.shade300),
                             ),
                             contentPadding: const EdgeInsets.symmetric(
                                 vertical: 12.0, horizontal: 4.0),
@@ -3377,16 +3468,19 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
               unselectedLabelColor: Colors.grey,
               isScrollable: true,
               tabs: [
-                Tab(text: 'To Validate ($toValidate)'),
-                Tab(text: 'Overtime ($overtime)'),
-                Tab(text: 'Validated ($validated)'),
+                Tab(text: 'My Attendances ($myAttendances)'),
+               if (attendanceTypeCheck == true)...[
+                 Tab(text: 'To Validate ($toValidate)'),
+                 Tab(text: 'Overtime ($overtime)'),
+                 Tab(text: 'Validated ($validated)'),
+               ]
               ],
             ),
             SizedBox(height: MediaQuery.of(context).size.height * 0.01),
             Expanded(
               child: TabBarView(
                 children: [
-                  toValidate == 0
+                  myAttendances == 0
                       ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(20.0),
@@ -3411,74 +3505,180 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                       ),
                     ),
                   )
-                      : buildValidateAttendanceContent(
-                      requestsNonValidAttendance,
+                      : buildMyAttendanceContent(
+                      requestsMyAttendance,
                       _scrollController,
                       searchText),
-                  overtime == 0
-                      ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.inventory_outlined,
-                            color: Colors.black,
-                            size: 92,
-                          ),
-                          SizedBox(height: 20),
-                          Text(
-                            "There are no attendance records to display",
-                            style: TextStyle(
-                                fontSize: 16.0,
-                                color: Colors.black,
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ],
+                  if (attendanceTypeCheck == true)...[
+                    toValidate == 0
+                        ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.inventory_outlined,
+                              color: Colors.black,
+                              size: 92,
+                            ),
+                            SizedBox(height: 20),
+                            Text(
+                              "There are no attendance records to display",
+                              style: TextStyle(
+                                  fontSize: 16.0,
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  )
-                      : buildOvertimeAttendanceContent(
-                      requestsOvertimeAttendance,
-                      _scrollController,
-                      searchText),
-                  validated == 0
-                      ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.inventory_outlined,
-                            color: Colors.black,
-                            size: 92,
-                          ),
-                          SizedBox(height: 20),
-                          Text(
-                            "There are no attendance records to display",
-                            style: TextStyle(
-                                fontSize: 16.0,
-                                color: Colors.black,
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ],
+                    )
+                        : buildValidateAttendanceContent(
+                        requestsNonValidAttendance,
+                        _scrollController,
+                        searchText),
+                    overtime == 0
+                        ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.inventory_outlined,
+                              color: Colors.black,
+                              size: 92,
+                            ),
+                            SizedBox(height: 20),
+                            Text(
+                              "There are no attendance records to display",
+                              style: TextStyle(
+                                  fontSize: 16.0,
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  )
-                      : buildValidatedAttendanceContent(
-                      requestsValidatedAttendance,
-                      _scrollController,
-                      searchText),
+                    )
+                        : buildOvertimeAttendanceContent(
+                        requestsOvertimeAttendance,
+                        _scrollController,
+                        searchText),
+                    validated == 0
+                        ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.inventory_outlined,
+                              color: Colors.black,
+                              size: 92,
+                            ),
+                            SizedBox(height: 20),
+                            Text(
+                              "There are no attendance records to display",
+                              style: TextStyle(
+                                  fontSize: 16.0,
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                        : buildValidatedAttendanceContent(
+                        requestsValidatedAttendance,
+                        _scrollController,
+                        searchText),
+                  ]
                 ],
               ),
             ),
           ],
         ),
       ],
+    );
+  }
+
+  Widget buildMyAttendanceLoadingAttendanceContent(
+      List<Map<String, dynamic>> requestsMyAttendance,
+      scrollController,
+      searchText) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: ListView.builder(
+        shrinkWrap: true,
+        itemCount: 10,
+        itemBuilder: (context, index) {
+          return Shimmer.fromColors(
+            baseColor: Colors.grey[300]!,
+            highlightColor: Colors.grey[100]!,
+            child: Container(
+              padding: const EdgeInsets.all(8.0),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey[50]!),
+                  borderRadius: BorderRadius.circular(8.0),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.shade400.withOpacity(0.3),
+                      spreadRadius: 2,
+                      blurRadius: 5,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Card(
+                  shape: RoundedRectangleBorder(
+                    side: const BorderSide(color: Colors.white, width: 0.0),
+                    borderRadius: BorderRadius.circular(10.0),
+                  ),
+                  color: Colors.white,
+                  elevation: 0.1,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 40.0,
+                              height: 40.0,
+                              color: Colors.grey[300],
+                            ),
+                          ],
+                        ),
+                        SizedBox(
+                            height: MediaQuery.of(context).size.height * 0.005),
+                        Container(
+                          height: 20.0,
+                          color: Colors.grey[300],
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          height: 20.0,
+                          width: 80.0,
+                          color: Colors.grey[300],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -3707,6 +3907,47 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
     );
   }
 
+
+  Widget buildMyAttendanceContent(
+      List<Map<String, dynamic>> requestsMyAttendance,
+      scrollController,
+      searchText) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: ListView.builder(
+        controller: scrollController,
+        shrinkWrap: true,
+        itemCount: (searchText.isEmpty
+            ? requestsMyAttendance.length
+            : filteredMyAttendance.length) +
+            1, // extra item for loader
+        itemBuilder: (context, index) {
+          if (index ==
+              (searchText.isEmpty
+                  ? requestsMyAttendance.length
+                  : filteredMyAttendance.length)) {
+            return isFetchingMore
+                ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(child: CircularProgressIndicator()),
+            )
+                : const SizedBox();
+          }
+
+          final record = searchText.isEmpty
+              ? requestsMyAttendance[index]
+              : filteredMyAttendance[index];
+          final firstName = record['employee_first_name'] ?? '';
+          final lastName = record['employee_last_name'] ?? '';
+          final fullName =
+              (firstName.isEmpty ? '' : firstName) + (lastName.isEmpty ? '' : ' $lastName');
+          final profile = record['employee_profile'];
+          return buildMyAttendance(record, fullName, profile ?? "", baseUrl, getToken);
+        },
+      ),
+    );
+  }
+
   Widget buildValidateAttendanceContent(
       List<Map<String, dynamic>> requestsNonValidAttendance,
       scrollController,
@@ -3730,7 +3971,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
               (lastName.isEmpty ? '' : ' $lastName');
           final profile = record['employee_profile'];
           return buildNonValidatedAttendance(
-              record, fullName, profile ?? "", baseUrl);
+              record, fullName, profile ?? "", baseUrl, getToken);
         },
       ),
     );
@@ -3759,7 +4000,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
               (lastName.isEmpty ? '' : ' $lastName');
           final profile = record['employee_profile'];
           return buildOvertimeAttendance(
-              record, fullName, profile ?? "", baseUrl);
+              record, fullName, profile ?? "", baseUrl, getToken);
         },
       ),
     );
@@ -3787,14 +4028,14 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
               (lastName.isEmpty ? '' : ' $lastName');
           final profile = record['employee_profile'];
           return buildValidatedAttendance(
-              record, fullName, profile ?? "", baseUrl);
+              record, fullName, profile ?? "", baseUrl, getToken);
         },
       ),
     );
   }
 
-  Widget buildNonValidatedAttendance(
-      Map<String, dynamic> record, fullName, String profile, baseUrl) {
+  Widget buildMyAttendance(
+      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
     return GestureDetector(
       onTap: () {
         showDialog(
@@ -3843,6 +4084,399 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                                       child: Image.network(
                                         baseUrl +
                                             record['employee_profile_url'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (BuildContext context,
+                                            Object exception,
+                                            StackTrace? stackTrace) {
+                                          return const Icon(Icons.person,
+                                              color: Colors.grey);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                if (record['employee_profile_url'] == null ||
+                                    record['employee_profile_url'].isEmpty)
+                                  Positioned.fill(
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: Colors.grey[400],
+                                      ),
+                                      child: const Icon(Icons.person),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          SizedBox(
+                              width: MediaQuery.of(context).size.width * 0.01),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  fullName ?? '',
+                                  style: const TextStyle(
+                                      fontSize: 16.0,
+                                      fontWeight: FontWeight.bold),
+                                  maxLines: 2,
+                                ),
+                                Text(
+                                  record['badge_id'] != null
+                                      ? '${record['badge_id']}'
+                                      : '',
+                                  style: const TextStyle(
+                                      fontSize: 12.0,
+                                      fontWeight: FontWeight.normal),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[200],
+                                  borderRadius: BorderRadius.circular(4.0),
+                                ),
+                              ),
+                              SizedBox(
+                                  width: MediaQuery.of(context).size.width *
+                                      0.008),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[200],
+                                  borderRadius: BorderRadius.circular(4.0),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.05),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Date',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text('${record['attendance_date'] ?? 'None'}'),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Check-In',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text('${record['attendance_clock_in'] ?? 'None'}'),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Check-Out',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text('${record['attendance_clock_out'] ?? 'None'}'),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Shift',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text('${record['shift_name'] ?? 'None'}'),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Minimum Hour',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text('${record['minimum_hour'] ?? 'None'}'),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Check-In Date',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text(
+                              '${record['attendance_clock_in_date'] ?? 'None'}'),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Check-Out Date',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text(
+                              '${record['attendance_clock_out_date'] ?? 'None'}'),
+                        ],
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'At Work',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                          Text('${record['attendance_worked_hour'] ?? 'None'}'),
+                        ],
+                      ),
+                      SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.01),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(8.0),
+        color: Colors.white,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey[50]!),
+            borderRadius: BorderRadius.circular(8.0),
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.grey.shade400.withOpacity(0.3),
+                spreadRadius: 2,
+                blurRadius: 5,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Card(
+            shape: RoundedRectangleBorder(
+              side: const BorderSide(color: Colors.white, width: 0.0),
+              borderRadius: BorderRadius.circular(10.0),
+            ),
+            color: Colors.white,
+            elevation: 0.1,
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                        width: 40.0,
+                        height: 40.0,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: Colors.grey,
+                              width: 1.0), // Optional border
+                        ),
+                        child: Stack(
+                          children: [
+                            if (record['employee_profile_url'] != null &&
+                                record['employee_profile_url'].isNotEmpty)
+                              Positioned.fill(
+                                child: ClipOval(
+                                  child: Image.network(
+                                    baseUrl + record['employee_profile_url'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (BuildContext context,
+                                        Object exception,
+                                        StackTrace? stackTrace) {
+                                      return const Icon(Icons.person,
+                                          color: Colors.grey); // Fallback icon
+                                    },
+                                  ),
+                                ),
+                              ),
+                            if (record['employee_profile_url'] == null ||
+                                record['employee_profile_url'].isEmpty)
+                              Positioned.fill(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.grey[400],
+                                  ),
+                                  child: const Icon(Icons.person),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(width: MediaQuery.of(context).size.width * 0.01),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              fullName ?? '',
+                              style: const TextStyle(
+                                  fontSize: 16.0, fontWeight: FontWeight.bold),
+                              maxLines: 2,
+                            ),
+                            Text(
+                              record['badge_id'] != null
+                                  ? '${record['badge_id']}'
+                                  : '',
+                              style: const TextStyle(
+                                  fontSize: 12.0,
+                                  fontWeight: FontWeight.normal),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    ],
+                  ),
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.005),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Date',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      Text('${record['attendance_date'] ?? 'None'}'),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Check-In',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      Text('${record['attendance_clock_in'] ?? 'None'}'),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Check-Out',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      Text('${record['attendance_clock_out'] ?? 'None'}'),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Worked Hours',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      Text('${record['attendance_worked_hour'] ?? 'None'}'),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Minimum Hours',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      Text('${record['minimum_hour'] ?? 'None'}'),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Shift',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      Text('${record['shift_name'] ?? 'None'}'),
+                    ],
+                  ),
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.01),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget buildNonValidatedAttendance(
+      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
+    return GestureDetector(
+      onTap: () {
+        showDialog(
+          context: context,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(" "),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.grey),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: MediaQuery.of(context).size.width * 0.95,
+                height: MediaQuery.of(context).size.height * 0.5,
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Container(
+                            width: 40.0,
+                            height: 40.0,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border:
+                              Border.all(color: Colors.grey, width: 1.0),
+                            ),
+                            child: Stack(
+                              children: [
+                                if (record['employee_profile_url'] != null &&
+                                    record['employee_profile_url'].isNotEmpty)
+                                  Positioned.fill(
+                                    child: ClipOval(
+                                      child: Image.network(
+                                        baseUrl +
+                                            record['employee_profile_url'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,
@@ -4155,6 +4789,9 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                                 child: ClipOval(
                                   child: Image.network(
                                     baseUrl + record['employee_profile_url'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -4530,7 +5167,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   }
 
   Widget buildOvertimeAttendance(
-      Map<String, dynamic> record, fullName, String profile, baseUrl) {
+      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
     return GestureDetector(
       onTap: () {
         showDialog(
@@ -4579,6 +5216,9 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                                       child: Image.network(
                                         baseUrl +
                                             record['employee_profile_url'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,
@@ -4889,6 +5529,9 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                                 child: ClipOval(
                                   child: Image.network(
                                     baseUrl + record['employee_profile_url'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -5231,7 +5874,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   }
 
   Widget buildValidatedAttendance(
-      Map<String, dynamic> record, fullName, String profile, baseUrl) {
+      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
     return GestureDetector(
       onTap: () {
         showDialog(
@@ -5280,6 +5923,9 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                                       child: Image.network(
                                         baseUrl +
                                             record['employee_profile_url'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,
@@ -5492,6 +6138,9 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                                 child: ClipOval(
                                   child: Image.network(
                                     baseUrl + record['employee_profile_url'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,

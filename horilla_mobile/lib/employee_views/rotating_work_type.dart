@@ -86,6 +86,8 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
   Map<String, String> employeeIdMap = {};
   late Map<String, dynamic> arguments;
   late String baseUrl = '';
+  late String getToken = '';
+
 
   @override
   void initState() {
@@ -100,6 +102,7 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
       getEmployees();
       getWorkType();
       getBaseUrl();
+      fetchToken();
       _simulateLoading();
       getRotatingWorkType();
       _simulateLoading();
@@ -109,6 +112,14 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
   Future<void> _simulateLoading() async {
     await Future.delayed(const Duration(seconds: 5));
     setState(() {});
+  }
+
+  Future<void> fetchToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    setState(() {
+      getToken = token ?? '';
+    });
   }
 
   Future<void> getBaseUrl() async {
@@ -134,6 +145,7 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
       permissionCheck = true;
     }
   }
+
   void accessChecks() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
@@ -307,6 +319,11 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
+
+    employeeItems.clear();
+    employeeIdMap.clear();
+    allEmployeeList.clear();
+
     for (var page = 1;; page++) {
       var uri = Uri.parse(
           '$typedServerUrl/api/employee/employee-selector?page=$page');
@@ -314,9 +331,17 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
       });
+
       if (response.statusCode == 200) {
+        var responseBody = jsonDecode(response.body);
+        var results = responseBody['results'];
+
+        if (results == null || results.isEmpty) {
+          break; // ✅ No more data, stop the loop
+        }
+
         setState(() {
-          for (var employee in jsonDecode(response.body)['results']) {
+          for (var employee in results) {
             final firstName = employee['employee_first_name'] ?? '';
             final lastName = employee['employee_last_name'] ?? '';
             final fullName = (firstName.isEmpty ? '' : firstName) +
@@ -325,10 +350,11 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
             employeeItems.add(fullName);
             employeeIdMap[fullName] = employeeId;
           }
-          allEmployeeList = List<Map<String, dynamic>>.from(
-            jsonDecode(response.body)['results'],
-          );
+          allEmployeeList.addAll(List<Map<String, dynamic>>.from(results));
         });
+      } else {
+        print("Error: ${response.statusCode}");
+        break; // ✅ Exit loop on error
       }
     }
   }
@@ -444,8 +470,6 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
         "rotate_after_day": updatedDetails['rotate_after_day'],
       }),
     );
-    print('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ');
-    print(response.body);
 
     if (response.statusCode == 200) {
       isSaveClick = false;
@@ -1559,7 +1583,7 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
     );
   }
 
-  Widget buildListItem(Map<String, dynamic> record, baseUrl) {
+  Widget buildListItem(Map<String, dynamic> record, baseUrl, token) {
     final image = employeeDetails['employee_profile'] ?? '';
 
     return GestureDetector(
@@ -1611,6 +1635,9 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
                                       child: Image.network(
                                         baseUrl +
                                             employeeDetails['employee_profile'],
+                                        headers: {
+                                          "Authorization": "Bearer $token",
+                                        },
                                         fit: BoxFit.cover,
                                         errorBuilder: (BuildContext context,
                                             Object exception,
@@ -1820,6 +1847,9 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
                                   child: Image.network(
                                     baseUrl +
                                         employeeDetails['employee_profile'],
+                                    headers: {
+                                      "Authorization": "Bearer $token",
+                                    },
                                     fit: BoxFit.cover,
                                     errorBuilder: (BuildContext context,
                                         Object exception,
@@ -2106,49 +2136,6 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
         backgroundColor: Colors.white,
         title: const Text('Rotating Work Type',
             style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-        // actions: [
-        //   Padding(
-        //     padding: const EdgeInsets.all(12.0),
-        //     child: Row(
-        //       mainAxisAlignment: MainAxisAlignment.end,
-        //       children: [
-        //         // if (permissionCheck)
-        //         Container(
-        //           alignment: Alignment.centerRight,
-        //           child: ElevatedButton(
-        //             onPressed: () {
-        //               setState(() {
-        //                 _typeAheadCreateRotatingWorkTypeController.clear();
-        //                 createRotateStartDateController.clear();
-        //                 selectedCreateBasedOnValue = " ";
-        //                 _rotateCreateDayController.text = "0";
-        //                 _validateWorkType = false;
-        //                 _validateRequestedDate = false;
-        //                 _validateRotateDay = false;
-        //                 _validateBasedOn = false;
-        //                 _errorMessage = null;
-        //                 isAction = false;
-        //               });
-        //               _showCreateRotatingWorkType(context,
-        //                   selectedEmployeeFullName, selectedEmployerId);
-        //             },
-        //             style: ElevatedButton.styleFrom(
-        //               minimumSize: const Size(75, 50),
-        //               backgroundColor: Colors.white,
-        //               shape: RoundedRectangleBorder(
-        //                 borderRadius: BorderRadius.circular(4.0),
-        //                 side: const BorderSide(color: Colors.red),
-        //               ),
-        //             ),
-        //             child: const Text('CREATE',
-        //                 style: TextStyle(color: Colors.red)),
-        //           ),
-        //         ),
-        //         // ),
-        //       ],
-        //     ),
-        //   ),
-        // ],
       ),
       body: _isShimmerVisible
           ? _buildLoadingWidget()
@@ -2328,7 +2315,7 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
                   final record = searchText.isEmpty
                       ? requests[index]
                       : filteredRecords[index];
-                  return buildListItem(record, baseUrl);
+                  return buildListItem(record, baseUrl, getToken);
                 },
               ),
             ),
